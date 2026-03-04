@@ -11,6 +11,7 @@ class PromptEmbeds:
     prompt_embeds: torch.Tensor
     add_text_embeds: torch.Tensor
     add_time_ids: torch.Tensor
+    do_cfg: bool = True
 
 
 @dataclass

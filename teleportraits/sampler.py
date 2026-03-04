@@ -48,7 +48,10 @@ def run_denoise_trajectory(
         if attn_controller is not None:
             attn_controller.set_step(step_index=i, timestep=t_int)
 
-        model_input = torch.cat([latents, latents], dim=0)
+        if prompt_embeds.do_cfg:
+            model_input = torch.cat([latents, latents], dim=0)
+        else:
+            model_input = latents
         model_input = pipe.scheduler.scale_model_input(model_input, t)
 
         added_cond_kwargs = {
@@ -64,8 +67,9 @@ def run_denoise_trajectory(
             return_dict=False,
         )[0]
 
-        noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-        noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
+        if prompt_embeds.do_cfg:
+            noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+            noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
 
         latents = pipe.scheduler.step(noise_pred, t, latents, return_dict=False)[0]
 

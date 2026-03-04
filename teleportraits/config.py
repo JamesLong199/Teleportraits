@@ -8,6 +8,7 @@ from typing import Tuple
 class TeleportraitConfig:
     model_id: str = "stabilityai/stable-diffusion-xl-base-1.0"
     num_inference_steps: int = 50
+    image_size: int = 1024
 
     inversion_guidance_scale: float = 1.0
     inversion_fixed_point_iters: int = 2

@@ -66,7 +66,7 @@ def ddim_fixed_point_invert(
         x_t = coeff_x * x_prev_f32
 
         for _ in range(fixed_point_iters):
-            eps = _predict_noise_cfg(
+            eps = _predict_noise(
                 pipe=pipe,
                 latents=x_t.to(dtype=dtype),
                 timestep=curr_t,
@@ -86,7 +86,7 @@ def ddim_fixed_point_invert(
     )
 
 
-def _predict_noise_cfg(
+def _predict_noise(
     pipe: StableDiffusionXLPipeline,
     latents: torch.Tensor,
     timestep: int,
@@ -95,7 +95,10 @@ def _predict_noise_cfg(
 ) -> torch.Tensor:
     t = torch.tensor(timestep, device=latents.device, dtype=torch.long)
 
-    model_input = torch.cat([latents, latents], dim=0)
+    if prompt_embeds.do_cfg:
+        model_input = torch.cat([latents, latents], dim=0)
+    else:
+        model_input = latents
     model_input = pipe.scheduler.scale_model_input(model_input, t)
 
     added_cond_kwargs = {
@@ -111,5 +114,7 @@ def _predict_noise_cfg(
         return_dict=False,
     )[0]
 
-    noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-    return noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
+    if prompt_embeds.do_cfg:
+        noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+        return noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
+    return noise_pred

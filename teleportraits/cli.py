@@ -38,6 +38,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser.add_argument("--model-id", default="stabilityai/stable-diffusion-xl-base-1.0")
     parser.add_argument("--num-inference-steps", type=int, default=50)
+    parser.add_argument("--image-size", type=int, default=1024, help="Resize scene/reference to square size (paper: 1024).")
 
     parser.add_argument("--inversion-guidance-scale", type=float, default=1.0)
     parser.add_argument("--inversion-fixed-point-iters", type=int, default=2)
@@ -76,6 +77,7 @@ def main() -> None:
     config = TeleportraitConfig(
         model_id=args.model_id,
         num_inference_steps=args.num_inference_steps,
+        image_size=args.image_size,
         inversion_guidance_scale=args.inversion_guidance_scale,
         inversion_fixed_point_iters=args.inversion_fixed_point_iters,
         edit_guidance_scale=args.edit_guidance_scale,

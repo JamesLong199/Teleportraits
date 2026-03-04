@@ -69,6 +69,7 @@ def encode_prompt_sdxl(
         prompt_embeds=prompt_embeds,
         add_text_embeds=text_embeds,
         add_time_ids=add_time_ids,
+        do_cfg=do_cfg,
     )
 
 

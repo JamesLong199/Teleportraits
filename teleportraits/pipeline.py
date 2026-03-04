@@ -112,8 +112,8 @@ class TeleportraitsPipeline:
         }
 
         _log_stage(self.config, "0/8 Loading inputs")
-        scene_image = _resize_to_multiple_of_8(load_image(scene_image_path))
-        reference_image = _resize_to_multiple_of_8(load_image(reference_image_path))
+        scene_image = _resize_for_model(load_image(scene_image_path), target_size=self.config.image_size)
+        reference_image = _resize_for_model(load_image(reference_image_path), target_size=self.config.image_size)
         scene_image.save(scene_input_path)
         reference_image.save(reference_input_path)
 
@@ -124,21 +124,32 @@ class TeleportraitsPipeline:
             explicit_edit_prompt=edit_prompt,
             placeholder=person_placeholder,
         )
+        resolved_initial_prompt = scene_prompt.strip()
+        inversion_do_cfg = self.config.inversion_guidance_scale != 1.0
         outputs["resolved_edit_prompt"] = resolved_edit_prompt
+        outputs["resolved_initial_prompt"] = resolved_initial_prompt
 
-        scene_prompt_embeds = encode_prompt_sdxl(
+        scene_prompt_embeds_inv = encode_prompt_sdxl(
             self.pipe,
             prompt=scene_prompt,
             negative_prompt=self.config.negative_prompt,
             image_size=scene_image.size,
             device=self.device,
-            do_cfg=True,
+            do_cfg=inversion_do_cfg,
         )
-        reference_prompt_embeds = encode_prompt_sdxl(
+        reference_prompt_embeds_inv = encode_prompt_sdxl(
             self.pipe,
             prompt=reference_prompt,
             negative_prompt=self.config.negative_prompt,
             image_size=reference_image.size,
+            device=self.device,
+            do_cfg=inversion_do_cfg,
+        )
+        initial_prompt_embeds = encode_prompt_sdxl(
+            self.pipe,
+            prompt=resolved_initial_prompt,
+            negative_prompt=self.config.negative_prompt,
+            image_size=scene_image.size,
             device=self.device,
             do_cfg=True,
         )
@@ -160,7 +171,7 @@ class TeleportraitsPipeline:
             scene_inv = ddim_fixed_point_invert(
                 pipe=self.pipe,
                 clean_latents=scene_latents,
-                prompt_embeds=scene_prompt_embeds,
+                prompt_embeds=scene_prompt_embeds_inv,
                 guidance_scale=self.config.inversion_guidance_scale,
                 num_inference_steps=self.config.num_inference_steps,
                 fixed_point_iters=self.config.inversion_fixed_point_iters,
@@ -180,7 +191,7 @@ class TeleportraitsPipeline:
             reference_inv = ddim_fixed_point_invert(
                 pipe=self.pipe,
                 clean_latents=reference_latents,
-                prompt_embeds=reference_prompt_embeds,
+                prompt_embeds=reference_prompt_embeds_inv,
                 guidance_scale=self.config.inversion_guidance_scale,
                 num_inference_steps=self.config.num_inference_steps,
                 fixed_point_iters=self.config.inversion_fixed_point_iters,
@@ -203,7 +214,7 @@ class TeleportraitsPipeline:
             scene_reconstruction = run_denoise_trajectory(
                 pipe=self.pipe,
                 start_latents=scene_inv_start,
-                prompt_embeds=scene_prompt_embeds,
+                prompt_embeds=scene_prompt_embeds_inv,
                 guidance_scale=1.0,
                 num_inference_steps=self.config.num_inference_steps,
                 stage_name="Reconstruct scene",
@@ -226,7 +237,7 @@ class TeleportraitsPipeline:
             initial_pass = run_denoise_trajectory(
                 pipe=self.pipe,
                 start_latents=scene_inv_start,
-                prompt_embeds=edit_prompt_embeds,
+                prompt_embeds=initial_prompt_embeds,
                 guidance_scale=self.config.edit_guidance_scale,
                 num_inference_steps=self.config.num_inference_steps,
                 stage_name="Initial human pass",
@@ -314,7 +325,7 @@ class TeleportraitsPipeline:
                 run_denoise_trajectory(
                     pipe=self.pipe,
                     start_latents=reference_inv_start,
-                    prompt_embeds=reference_prompt_embeds,
+                    prompt_embeds=reference_prompt_embeds_inv,
                     guidance_scale=1.0,
                     num_inference_steps=self.config.num_inference_steps,
                     attn_controller=controller,
@@ -345,7 +356,10 @@ class TeleportraitsPipeline:
         return outputs
 
 
-def _resize_to_multiple_of_8(image: Image.Image) -> Image.Image:
+def _resize_for_model(image: Image.Image, target_size: int) -> Image.Image:
+    if target_size > 0:
+        return image.resize((target_size, target_size), Image.Resampling.LANCZOS)
+
     width, height = image.size
     new_width = max(8, (width // 8) * 8)
     new_height = max(8, (height // 8) * 8)
