@@ -50,7 +50,13 @@ class TeleportraitsPipeline:
             load_kwargs["torch_dtype"] = self.dtype
 
         self.pipe = StableDiffusionXLPipeline.from_pretrained(config.model_id, **load_kwargs)
-        self.pipe.scheduler = DDIMScheduler.from_config(self.pipe.scheduler.config)
+        self.pipe.scheduler = DDIMScheduler.from_config(
+            self.pipe.scheduler.config,
+            prediction_type="epsilon",
+            timestep_spacing="trailing",
+            set_alpha_to_one=True,
+            steps_offset=0,
+        )
         self.pipe = self.pipe.to(self.device)
 
         self.diff_mask_extractor = DifferenceMaskExtractor(
