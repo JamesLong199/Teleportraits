@@ -41,11 +41,12 @@ pip install -e .
 teleportraits \
   --scene-image /path/to/scene.jpg \
   --reference-image /path/to/person.jpg \
-  --scene-prompt "a wide-angle city street at sunset" \
+  --scene-prompt "a wide-angle city street at sunset with a person near the crosswalk" \
   --reference-prompt "a full-body photo of a woman in a red coat" \
-  --edit-prompt "a woman in a red coat standing near the crosswalk" \
   --output-dir /tmp/teleportraits_out
 ```
+
+By default, the insertion prompt is composed in paper style by replacing `a person` in the scene prompt with the reference prompt text. You can override with `--edit-prompt` if needed.
 
 Key outputs:
 

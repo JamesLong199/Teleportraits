@@ -17,6 +17,7 @@ from teleportraits.attention import (
 from teleportraits.blending import BlendWindow, LatentBlender, build_latent_masks
 from teleportraits.config import TeleportraitConfig
 from teleportraits.inversion import ddim_fixed_point_invert
+from teleportraits.prompts import compose_edit_prompt
 from teleportraits.sampler import run_denoise_trajectory
 from teleportraits.sdxl_utils import (
     encode_prompt_sdxl,
@@ -64,8 +65,9 @@ class TeleportraitsPipeline:
         reference_image_path: str,
         scene_prompt: str,
         reference_prompt: str,
-        edit_prompt: str,
+        edit_prompt: Optional[str],
         output_dir: str,
+        person_placeholder: str = "a person",
     ) -> Dict[str, str]:
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
@@ -91,9 +93,16 @@ class TeleportraitsPipeline:
             do_cfg=True,
         )
 
+        resolved_edit_prompt = compose_edit_prompt(
+            scene_prompt=scene_prompt,
+            reference_prompt=reference_prompt,
+            explicit_edit_prompt=edit_prompt,
+            placeholder=person_placeholder,
+        )
+
         edit_prompt_embeds = encode_prompt_sdxl(
             self.pipe,
-            prompt=edit_prompt,
+            prompt=resolved_edit_prompt,
             negative_prompt=self.config.negative_prompt,
             image_size=scene_image.size,
             device=self.device,
@@ -223,6 +232,7 @@ class TeleportraitsPipeline:
             "scene_reconstruction": str(scene_recon_path),
             "foreground_mask": str(fg_mask_path),
             "reference_mask": str(ref_mask_path),
+            "resolved_edit_prompt": resolved_edit_prompt,
         }
 
 

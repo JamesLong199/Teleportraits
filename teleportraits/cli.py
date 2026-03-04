@@ -14,7 +14,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--reference-image", required=True, help="Path to reference person image")
     parser.add_argument("--scene-prompt", required=True, help="Prompt describing the scene")
     parser.add_argument("--reference-prompt", required=True, help="Prompt describing the reference subject")
-    parser.add_argument("--edit-prompt", required=True, help="Prompt describing insertion output")
+    parser.add_argument(
+        "--edit-prompt",
+        default=None,
+        help="Optional override for insertion prompt; if omitted, composed from scene/reference prompts.",
+    )
+    parser.add_argument(
+        "--person-placeholder",
+        default="a person",
+        help="Placeholder phrase in scene prompt to be replaced by reference prompt.",
+    )
     parser.add_argument("--output-dir", required=True, help="Directory for outputs")
 
     parser.add_argument("--model-id", default="stabilityai/stable-diffusion-xl-base-1.0")
@@ -73,6 +82,7 @@ def main() -> None:
         reference_prompt=args.reference_prompt,
         edit_prompt=args.edit_prompt,
         output_dir=args.output_dir,
+        person_placeholder=args.person_placeholder,
     )
 
     print(json.dumps(outputs, indent=2))
