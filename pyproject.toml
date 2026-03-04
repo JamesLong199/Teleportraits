@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "teleportraits"
+version = "0.1.0"
+description = "Training-free people insertion into any scene (Teleportraits reproduction)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+  { name = "Teleportraits reproduction" }
+]
+dependencies = [
+  "torch>=2.2",
+  "diffusers>=0.32.0",
+  "transformers>=4.46.0",
+  "accelerate>=0.33.0",
+  "numpy>=1.26.0",
+  "Pillow>=10.0.0",
+  "scipy>=1.11.0",
+]
+
+[project.optional-dependencies]
+segmentation = [
+  "opencv-python>=4.9.0",
+]
+dev = [
+  "pytest>=8.2.0",
+]
+
+[project.scripts]
+teleportraits = "teleportraits.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "."}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["teleportraits*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+addopts = "-q"
