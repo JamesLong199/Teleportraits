@@ -25,6 +25,33 @@ def _largest_component(mask: np.ndarray, min_area_ratio: float) -> np.ndarray:
     return output
 
 
+def _heuristic_foreground_mask(image: Image.Image) -> np.ndarray:
+    arr = pil_to_np(image)
+    h, w, _ = arr.shape
+    border = max(2, min(h, w) // 20)
+
+    top = arr[:border, :, :]
+    bottom = arr[-border:, :, :]
+    left = arr[:, :border, :]
+    right = arr[:, -border:, :]
+    bg_pixels = np.concatenate(
+        [top.reshape(-1, 3), bottom.reshape(-1, 3), left.reshape(-1, 3), right.reshape(-1, 3)],
+        axis=0,
+    )
+
+    bg_color = np.median(bg_pixels, axis=0)
+    dist = np.linalg.norm(arr - bg_color[None, None, :], axis=2)
+    mask = dist > 0.08
+    mask = ndimage.binary_opening(mask, iterations=1)
+    mask = ndimage.binary_closing(mask, iterations=2)
+    mask = _largest_component(mask, min_area_ratio=0.001)
+
+    area = float(mask.mean())
+    if area < 0.01 or area > 0.95:
+        return np.ones((h, w), dtype=np.float32)
+    return mask.astype(np.float32)
+
+
 @dataclass
 class DifferenceMaskExtractor:
     threshold: float = 0.08
@@ -101,14 +128,14 @@ class TransformersPersonMaskExtractor:
 
 def reference_person_mask(image: Image.Image, extractor: Optional[TransformersPersonMaskExtractor]) -> np.ndarray:
     if extractor is None:
-        return np.ones((image.height, image.width), dtype=np.float32)
+        return _heuristic_foreground_mask(image)
 
     try:
         mask = extractor.extract(image)
     except Exception:
-        return np.ones((image.height, image.width), dtype=np.float32)
+        return _heuristic_foreground_mask(image)
 
     if mask is None:
-        return np.ones((image.height, image.width), dtype=np.float32)
+        return _heuristic_foreground_mask(image)
 
     return mask.astype(np.float32)

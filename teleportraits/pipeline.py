@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -17,6 +18,7 @@ from teleportraits.attention import (
 from teleportraits.blending import BlendWindow, LatentBlender, build_latent_masks
 from teleportraits.config import TeleportraitConfig
 from teleportraits.inversion import ddim_fixed_point_invert
+from teleportraits.masks import load_binary_mask
 from teleportraits.prompts import compose_edit_prompt
 from teleportraits.sampler import run_denoise_trajectory
 from teleportraits.sdxl_utils import (
@@ -39,11 +41,14 @@ class TeleportraitsPipeline:
         self.device = torch.device(config.device)
         self.dtype = parse_dtype(config.torch_dtype)
 
-        self.pipe = StableDiffusionXLPipeline.from_pretrained(
-            config.model_id,
-            torch_dtype=self.dtype,
-            use_safetensors=True,
-        )
+        load_kwargs = {"use_safetensors": True}
+        signature = inspect.signature(StableDiffusionXLPipeline.from_pretrained)
+        if "dtype" in signature.parameters:
+            load_kwargs["dtype"] = self.dtype
+        else:
+            load_kwargs["torch_dtype"] = self.dtype
+
+        self.pipe = StableDiffusionXLPipeline.from_pretrained(config.model_id, **load_kwargs)
         self.pipe.scheduler = DDIMScheduler.from_config(self.pipe.scheduler.config)
         self.pipe = self.pipe.to(self.device)
 
@@ -53,7 +58,7 @@ class TeleportraitsPipeline:
         )
 
         self.reference_mask_extractor: Optional[TransformersPersonMaskExtractor]
-        if config.attention_enabled:
+        if config.attention_enabled and config.use_transformers_reference_mask:
             self.reference_mask_extractor = TransformersPersonMaskExtractor()
         else:
             self.reference_mask_extractor = None
@@ -63,6 +68,8 @@ class TeleportraitsPipeline:
         self,
         scene_image_path: str,
         reference_image_path: str,
+        reference_mask_path: Optional[str],
+        reference_mask_invert: bool,
         scene_prompt: str,
         reference_prompt: str,
         edit_prompt: Optional[str],
@@ -120,6 +127,7 @@ class TeleportraitsPipeline:
             num_inference_steps=self.config.num_inference_steps,
             fixed_point_iters=self.config.inversion_fixed_point_iters,
         )
+        _ensure_finite(scene_inv.start_latents, "scene_inv.start_latents")
 
         reference_inv = ddim_fixed_point_invert(
             pipe=self.pipe,
@@ -129,6 +137,7 @@ class TeleportraitsPipeline:
             num_inference_steps=self.config.num_inference_steps,
             fixed_point_iters=self.config.inversion_fixed_point_iters,
         )
+        _ensure_finite(reference_inv.start_latents, "reference_inv.start_latents")
 
         scene_reconstruction = run_denoise_trajectory(
             pipe=self.pipe,
@@ -137,6 +146,7 @@ class TeleportraitsPipeline:
             guidance_scale=1.0,
             num_inference_steps=self.config.num_inference_steps,
         )
+        _ensure_finite(scene_reconstruction.final_latents, "scene_reconstruction.final_latents")
         scene_reconstruction_image = latents_to_image(self.pipe, scene_reconstruction.final_latents)
 
         affordance_pass = run_denoise_trajectory(
@@ -146,11 +156,19 @@ class TeleportraitsPipeline:
             guidance_scale=self.config.edit_guidance_scale,
             num_inference_steps=self.config.num_inference_steps,
         )
+        _ensure_finite(affordance_pass.final_latents, "affordance_pass.final_latents")
         affordance_image = latents_to_image(self.pipe, affordance_pass.final_latents)
 
         foreground_mask = self.diff_mask_extractor.extract(affordance_image, scene_reconstruction_image)
 
-        reference_mask = reference_person_mask(reference_image, self.reference_mask_extractor)
+        if reference_mask_path:
+            reference_mask = load_binary_mask(
+                path=reference_mask_path,
+                target_size=reference_image.size,
+                invert=reference_mask_invert,
+            )
+        else:
+            reference_mask = reference_person_mask(reference_image, self.reference_mask_extractor)
         reference_mask_tensor = torch.from_numpy(reference_mask).to(device=self.device, dtype=self.dtype)
 
         blend_window = BlendWindow(
@@ -208,6 +226,7 @@ class TeleportraitsPipeline:
                 attn_controller=controller if self.config.attention_enabled else None,
                 post_step_hook=blender,
             )
+            _ensure_finite(final_pass.final_latents, "final_pass.final_latents")
         finally:
             if original_processors is not None:
                 restore_processors(self.pipe, original_processors)
@@ -248,3 +267,10 @@ def _resize_to_multiple_of_8(image: Image.Image) -> Image.Image:
 def _mask_to_pil(mask: np.ndarray) -> Image.Image:
     arr = np.clip(mask * 255.0, 0, 255).astype(np.uint8)
     return Image.fromarray(arr, mode="L")
+
+
+def _ensure_finite(tensor: torch.Tensor, name: str) -> None:
+    if not torch.isfinite(tensor).all():
+        raise RuntimeError(
+            f"Found non-finite values in {name}. Try --torch-dtype float32 and lower --inversion-fixed-point-iters."
+        )

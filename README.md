@@ -41,6 +41,7 @@ pip install -e .
 teleportraits \
   --scene-image /path/to/scene.jpg \
   --reference-image /path/to/person.jpg \
+  --reference-mask-image /path/to/person_mask.png \
   --scene-prompt "a wide-angle city street at sunset with a person near the crosswalk" \
   --reference-prompt "a full-body photo of a woman in a red coat" \
   --output-dir /tmp/teleportraits_out
@@ -56,6 +57,8 @@ Key outputs:
 - `foreground_mask.png`: foreground mask used for latent blending.
 - `reference_mask.png`: reference subject mask used for K/V masking.
 
+If `--reference-mask-image` is provided, it is used directly and segmentation is skipped.
+
 ## Recommended Defaults
 
 - Base model: `stabilityai/stable-diffusion-xl-base-1.0`
@@ -67,3 +70,13 @@ Key outputs:
 ## Disclaimer
 
 This repository may require tuning for your prompts/images and GPU memory budget.
+
+## Troubleshooting
+
+- Black outputs or `invalid value encountered in cast`:
+  - Run with `--torch-dtype float32`.
+  - Reduce inversion iterations, e.g. `--inversion-fixed-point-iters 3`.
+- Poor reference mask:
+  - Default behavior uses a background-color heuristic (good for white/clean background portraits).
+  - Optional model-based mask: add `--use-transformers-reference-mask` (downloads extra weights).
+  - For best results, use a clean reference portrait with strong subject/background contrast.

@@ -31,33 +31,40 @@ def ddim_fixed_point_invert(
     timesteps_desc = [int(t.item()) for t in pipe.scheduler.timesteps]
     timesteps_asc = list(reversed(timesteps_desc))
 
-    alphas_cumprod = pipe.scheduler.alphas_cumprod.to(device=device, dtype=dtype)
+    alphas_cumprod = pipe.scheduler.alphas_cumprod.to(device=device, dtype=torch.float32)
 
     latents_by_timestep: Dict[int, torch.Tensor] = {}
     x_prev = clean_latents
-    latents_by_timestep[timesteps_asc[0]] = x_prev.detach().clone()
+    prev_t = 0
+    latents_by_timestep[0] = x_prev.detach().clone()
 
-    for prev_t, curr_t in zip(timesteps_asc[:-1], timesteps_asc[1:]):
+    for curr_t in timesteps_asc:
+        if curr_t == 0:
+            prev_t = 0
+            continue
+
         alpha_prev = alphas_cumprod[prev_t]
         alpha_curr = alphas_cumprod[curr_t]
 
         coeff_x = torch.sqrt(alpha_curr / alpha_prev)
         coeff_eps = torch.sqrt(1.0 - alpha_curr) - coeff_x * torch.sqrt(1.0 - alpha_prev)
 
-        x_t = coeff_x * x_prev
+        x_prev_f32 = x_prev.float()
+        x_t = coeff_x * x_prev_f32
 
         for _ in range(fixed_point_iters):
             eps = _predict_noise_cfg(
                 pipe=pipe,
-                latents=x_t,
+                latents=x_t.to(dtype=dtype),
                 timestep=curr_t,
                 prompt_embeds=prompt_embeds,
                 guidance_scale=guidance_scale,
-            )
-            x_t = coeff_x * x_prev + coeff_eps * eps
+            ).float()
+            x_t = coeff_x * x_prev_f32 + coeff_eps * eps
 
-        x_prev = x_t
+        x_prev = x_t.to(dtype=dtype)
         latents_by_timestep[curr_t] = x_prev.detach().clone()
+        prev_t = curr_t
 
     return InversionResult(
         start_latents=x_prev,

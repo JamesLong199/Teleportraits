@@ -10,7 +10,7 @@ class TeleportraitConfig:
     num_inference_steps: int = 50
 
     inversion_guidance_scale: float = 1.0
-    inversion_fixed_point_iters: int = 10
+    inversion_fixed_point_iters: int = 5
 
     edit_guidance_scale: float = 9.0
     negative_prompt: str = ""
@@ -25,6 +25,7 @@ class TeleportraitConfig:
 
     mask_threshold: float = 0.08
     mask_min_area_ratio: float = 0.001
+    use_transformers_reference_mask: bool = False
 
     seed: int = 0
     torch_dtype: str = "float16"
