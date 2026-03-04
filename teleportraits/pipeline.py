@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 import inspect
 from pathlib import Path
 from typing import Dict, Optional
@@ -76,7 +77,7 @@ class TeleportraitsPipeline:
         output_dir: str,
         person_placeholder: str = "a person",
     ) -> Dict[str, str]:
-        output_path = Path(output_dir)
+        output_path = _resolve_run_output_dir(Path(output_dir), self.config)
         output_path.mkdir(parents=True, exist_ok=True)
         cache_path = output_path / "_cache"
         cache_path.mkdir(parents=True, exist_ok=True)
@@ -99,6 +100,7 @@ class TeleportraitsPipeline:
         ref_mask_cache = cache_path / "reference_mask.npy"
 
         outputs: Dict[str, str] = {
+            "run_dir": str(output_path),
             "scene_input": str(scene_input_path),
             "reference_input": str(reference_input_path),
             "initial_pass": str(initial_path),
@@ -388,6 +390,27 @@ def _load_tensor_dict(path: Path, device: torch.device, dtype: torch.dtype) -> D
 def _log_stage(config: TeleportraitConfig, message: str) -> None:
     if config.verbose:
         print(f"[Teleportraits] {message}", flush=True)
+
+
+def _resolve_run_output_dir(base_output_dir: Path, config: TeleportraitConfig) -> Path:
+    # If user already points to a concrete experiment folder, use it directly.
+    if base_output_dir.name.startswith("exp_"):
+        _log_stage(config, f"Resuming explicit run dir: {base_output_dir.name}")
+        return base_output_dir
+
+    base_output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Root output dir always creates a fresh run folder.
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_dir = base_output_dir / f"exp_{timestamp}"
+    # Guard rare same-second collisions.
+    if run_dir.exists():
+        suffix = 1
+        while (base_output_dir / f"exp_{timestamp}_{suffix:02d}").exists():
+            suffix += 1
+        run_dir = base_output_dir / f"exp_{timestamp}_{suffix:02d}"
+    _log_stage(config, f"Creating new run: {run_dir.name}")
+    return run_dir
 
 
 def _ensure_finite(tensor: torch.Tensor, name: str) -> None:

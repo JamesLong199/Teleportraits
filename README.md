@@ -77,9 +77,12 @@ If `--reference-mask-image` is provided, it is used directly and segmentation is
 
 ## Resume Behavior
 
-- Re-run with the same `--output-dir` to resume.
-- The pipeline detects cached intermediates in `output-dir/_cache` and image assets in `output-dir/`.
-- It skips finished stages and continues from the first missing stage.
+- Each run is saved under a time-based subdirectory:
+  - `--output-dir /tmp/teleportraits_out` creates `/tmp/teleportraits_out/exp_YYYYmmdd_HHMMSS/`
+- Re-run with the same `--output-dir`:
+  - always creates a new `exp_*` directory
+- To resume a specific run directly, pass that subdirectory as `--output-dir`, e.g.:
+  - `--output-dir /tmp/teleportraits_out/exp_20260304_101530`
 
 ## Disclaimer
 
