@@ -41,7 +41,6 @@ pip install -e .
 teleportraits \
   --scene-image /path/to/scene.jpg \
   --reference-image /path/to/person.jpg \
-  --foreground-mask-image /path/to/scene_person_mask.png \
   --reference-mask-image /path/to/person_mask.png \
   --scene-prompt "a wide-angle city street at sunset with a person near the crosswalk" \
   --reference-prompt "a full-body photo of a woman in a red coat" \
@@ -60,7 +59,6 @@ Key outputs:
 - `reference_mask.png`: reference subject mask used for K/V masking.
 
 If `--reference-mask-image` is provided, it is used directly and segmentation is skipped.
-If `--foreground-mask-image` is provided, it is used directly and affordance-difference extraction is skipped.
 
 ## Recommended Defaults
 
@@ -76,6 +74,12 @@ If `--foreground-mask-image` is provided, it is used directly and affordance-dif
 - Diffusion/inversion progress bars are shown by default.
 - Use `--quiet` to reduce stage logs.
 - Use `--no-progress-bar` to disable tqdm bars.
+
+## Resume Behavior
+
+- Re-run with the same `--output-dir` to resume.
+- The pipeline detects cached intermediates in `output-dir/_cache` and image assets in `output-dir/`.
+- It skips finished stages and continues from the first missing stage.
 
 ## Disclaimer
 

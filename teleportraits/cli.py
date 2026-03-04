@@ -23,16 +23,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Invert the provided reference mask (useful if your mask uses black=subject).",
     )
     parser.add_argument("--scene-prompt", required=True, help="Prompt describing the scene")
-    parser.add_argument(
-        "--foreground-mask-image",
-        default=None,
-        help="Optional binary/gray mask for scene insertion region (white=foreground/subject region).",
-    )
-    parser.add_argument(
-        "--foreground-mask-invert",
-        action="store_true",
-        help="Invert the provided foreground mask (useful if your mask uses black=foreground).",
-    )
     parser.add_argument("--reference-prompt", required=True, help="Prompt describing the reference subject")
     parser.add_argument(
         "--edit-prompt",
@@ -110,8 +100,6 @@ def main() -> None:
         reference_image_path=args.reference_image,
         reference_mask_path=args.reference_mask_image,
         reference_mask_invert=args.reference_mask_invert,
-        foreground_mask_path=args.foreground_mask_image,
-        foreground_mask_invert=args.foreground_mask_invert,
         scene_prompt=args.scene_prompt,
         reference_prompt=args.reference_prompt,
         edit_prompt=args.edit_prompt,

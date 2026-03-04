@@ -70,8 +70,6 @@ class TeleportraitsPipeline:
         reference_image_path: str,
         reference_mask_path: Optional[str],
         reference_mask_invert: bool,
-        foreground_mask_path: Optional[str],
-        foreground_mask_invert: bool,
         scene_prompt: str,
         reference_prompt: str,
         edit_prompt: Optional[str],
@@ -80,12 +78,52 @@ class TeleportraitsPipeline:
     ) -> Dict[str, str]:
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
+        cache_path = output_path / "_cache"
+        cache_path.mkdir(parents=True, exist_ok=True)
+
+        scene_input_path = output_path / "scene_input.png"
+        reference_input_path = output_path / "reference_input.png"
+        initial_path = output_path / "initial_pass.png"
+        affordance_path = output_path / "affordance_pass.png"
+        scene_recon_path = output_path / "scene_reconstruction.png"
+        fg_mask_path = output_path / "foreground_mask.png"
+        ref_mask_path = output_path / "reference_mask.png"
+        final_path = output_path / "final.png"
+
+        scene_inv_cache = cache_path / "scene_inv_start_latents.pt"
+        reference_inv_cache = cache_path / "reference_inv_start_latents.pt"
+        scene_recon_final_cache = cache_path / "scene_reconstruction_final_latents.pt"
+        scene_recon_traj_cache = cache_path / "scene_reconstruction_trajectory.pt"
+        initial_final_cache = cache_path / "initial_pass_final_latents.pt"
+        fg_mask_cache = cache_path / "foreground_mask.npy"
+        ref_mask_cache = cache_path / "reference_mask.npy"
+
+        outputs: Dict[str, str] = {
+            "scene_input": str(scene_input_path),
+            "reference_input": str(reference_input_path),
+            "initial_pass": str(initial_path),
+            "affordance_pass": str(affordance_path),
+            "scene_reconstruction": str(scene_recon_path),
+            "foreground_mask": str(fg_mask_path),
+            "reference_mask": str(ref_mask_path),
+            "final": str(final_path),
+        }
 
         _log_stage(self.config, "0/8 Loading inputs")
         scene_image = _resize_to_multiple_of_8(load_image(scene_image_path))
         reference_image = _resize_to_multiple_of_8(load_image(reference_image_path))
+        scene_image.save(scene_input_path)
+        reference_image.save(reference_input_path)
 
         _log_stage(self.config, "1/8 Encoding prompts")
+        resolved_edit_prompt = compose_edit_prompt(
+            scene_prompt=scene_prompt,
+            reference_prompt=reference_prompt,
+            explicit_edit_prompt=edit_prompt,
+            placeholder=person_placeholder,
+        )
+        outputs["resolved_edit_prompt"] = resolved_edit_prompt
+
         scene_prompt_embeds = encode_prompt_sdxl(
             self.pipe,
             prompt=scene_prompt,
@@ -94,7 +132,6 @@ class TeleportraitsPipeline:
             device=self.device,
             do_cfg=True,
         )
-
         reference_prompt_embeds = encode_prompt_sdxl(
             self.pipe,
             prompt=reference_prompt,
@@ -103,14 +140,6 @@ class TeleportraitsPipeline:
             device=self.device,
             do_cfg=True,
         )
-
-        resolved_edit_prompt = compose_edit_prompt(
-            scene_prompt=scene_prompt,
-            reference_prompt=reference_prompt,
-            explicit_edit_prompt=edit_prompt,
-            placeholder=person_placeholder,
-        )
-
         edit_prompt_embeds = encode_prompt_sdxl(
             self.pipe,
             prompt=resolved_edit_prompt,
@@ -120,96 +149,142 @@ class TeleportraitsPipeline:
             do_cfg=True,
         )
 
-        scene_latents = image_to_latents(self.pipe, scene_image, device=self.device, dtype=self.dtype)
-        reference_latents = image_to_latents(self.pipe, reference_image, device=self.device, dtype=self.dtype)
-
-        _log_stage(self.config, "2/8 DDIM inversion: scene")
-        scene_inv = ddim_fixed_point_invert(
-            pipe=self.pipe,
-            clean_latents=scene_latents,
-            prompt_embeds=scene_prompt_embeds,
-            guidance_scale=self.config.inversion_guidance_scale,
-            num_inference_steps=self.config.num_inference_steps,
-            fixed_point_iters=self.config.inversion_fixed_point_iters,
-            stage_name="Invert scene",
-            show_progress_bar=self.config.show_progress_bar,
-        )
-        _ensure_finite(scene_inv.start_latents, "scene_inv.start_latents")
-
-        _log_stage(self.config, "3/8 DDIM inversion: reference")
-        reference_inv = ddim_fixed_point_invert(
-            pipe=self.pipe,
-            clean_latents=reference_latents,
-            prompt_embeds=reference_prompt_embeds,
-            guidance_scale=self.config.inversion_guidance_scale,
-            num_inference_steps=self.config.num_inference_steps,
-            fixed_point_iters=self.config.inversion_fixed_point_iters,
-            stage_name="Invert reference",
-            show_progress_bar=self.config.show_progress_bar,
-        )
-        _ensure_finite(reference_inv.start_latents, "reference_inv.start_latents")
-
-        _log_stage(self.config, "4/8 Scene reconstruction")
-        scene_reconstruction = run_denoise_trajectory(
-            pipe=self.pipe,
-            start_latents=scene_inv.start_latents,
-            prompt_embeds=scene_prompt_embeds,
-            guidance_scale=1.0,
-            num_inference_steps=self.config.num_inference_steps,
-            stage_name="Reconstruct scene",
-            show_progress_bar=self.config.show_progress_bar,
-        )
-        _ensure_finite(scene_reconstruction.final_latents, "scene_reconstruction.final_latents")
-        scene_reconstruction_image = latents_to_image(self.pipe, scene_reconstruction.final_latents)
-
-        _log_stage(self.config, "5/8 Initial human generation pass")
-        initial_pass = run_denoise_trajectory(
-            pipe=self.pipe,
-            start_latents=scene_inv.start_latents,
-            prompt_embeds=edit_prompt_embeds,
-            guidance_scale=self.config.edit_guidance_scale,
-            num_inference_steps=self.config.num_inference_steps,
-            stage_name="Initial human pass",
-            show_progress_bar=self.config.show_progress_bar,
-        )
-        _ensure_finite(initial_pass.final_latents, "initial_pass.final_latents")
-        initial_pass_image = latents_to_image(self.pipe, initial_pass.final_latents)
-
-        if foreground_mask_path:
-            _log_stage(self.config, "6/8 Loading foreground mask override")
-            foreground_mask = load_binary_mask(
-                path=foreground_mask_path,
-                target_size=scene_image.size,
-                invert=foreground_mask_invert,
+        if scene_inv_cache.exists():
+            _log_stage(self.config, "2/8 DDIM inversion: scene (resumed)")
+            scene_inv_start = _load_tensor(scene_inv_cache, device=self.device, dtype=self.dtype)
+        else:
+            _log_stage(self.config, "2/8 DDIM inversion: scene")
+            scene_latents = image_to_latents(self.pipe, scene_image, device=self.device, dtype=self.dtype)
+            scene_inv = ddim_fixed_point_invert(
+                pipe=self.pipe,
+                clean_latents=scene_latents,
+                prompt_embeds=scene_prompt_embeds,
+                guidance_scale=self.config.inversion_guidance_scale,
+                num_inference_steps=self.config.num_inference_steps,
+                fixed_point_iters=self.config.inversion_fixed_point_iters,
+                stage_name="Invert scene",
+                show_progress_bar=self.config.show_progress_bar,
             )
+            scene_inv_start = scene_inv.start_latents
+            _save_tensor(scene_inv_cache, scene_inv_start)
+        _ensure_finite(scene_inv_start, "scene_inv_start")
+
+        if reference_inv_cache.exists():
+            _log_stage(self.config, "3/8 DDIM inversion: reference (resumed)")
+            reference_inv_start = _load_tensor(reference_inv_cache, device=self.device, dtype=self.dtype)
+        else:
+            _log_stage(self.config, "3/8 DDIM inversion: reference")
+            reference_latents = image_to_latents(self.pipe, reference_image, device=self.device, dtype=self.dtype)
+            reference_inv = ddim_fixed_point_invert(
+                pipe=self.pipe,
+                clean_latents=reference_latents,
+                prompt_embeds=reference_prompt_embeds,
+                guidance_scale=self.config.inversion_guidance_scale,
+                num_inference_steps=self.config.num_inference_steps,
+                fixed_point_iters=self.config.inversion_fixed_point_iters,
+                stage_name="Invert reference",
+                show_progress_bar=self.config.show_progress_bar,
+            )
+            reference_inv_start = reference_inv.start_latents
+            _save_tensor(reference_inv_cache, reference_inv_start)
+        _ensure_finite(reference_inv_start, "reference_inv_start")
+
+        if scene_recon_path.exists() and scene_recon_final_cache.exists() and scene_recon_traj_cache.exists():
+            _log_stage(self.config, "4/8 Scene reconstruction (resumed)")
+            scene_reconstruction_image = load_image(str(scene_recon_path))
+            scene_reconstruction_final = _load_tensor(scene_recon_final_cache, device=self.device, dtype=self.dtype)
+            scene_reconstruction_traj = _load_tensor_dict(
+                scene_recon_traj_cache, device=self.device, dtype=self.dtype
+            )
+        else:
+            _log_stage(self.config, "4/8 Scene reconstruction")
+            scene_reconstruction = run_denoise_trajectory(
+                pipe=self.pipe,
+                start_latents=scene_inv_start,
+                prompt_embeds=scene_prompt_embeds,
+                guidance_scale=1.0,
+                num_inference_steps=self.config.num_inference_steps,
+                stage_name="Reconstruct scene",
+                show_progress_bar=self.config.show_progress_bar,
+            )
+            scene_reconstruction_final = scene_reconstruction.final_latents
+            scene_reconstruction_traj = scene_reconstruction.latents_by_timestep
+            scene_reconstruction_image = latents_to_image(self.pipe, scene_reconstruction_final)
+            scene_reconstruction_image.save(scene_recon_path)
+            _save_tensor(scene_recon_final_cache, scene_reconstruction_final)
+            _save_tensor_dict(scene_recon_traj_cache, scene_reconstruction_traj)
+        _ensure_finite(scene_reconstruction_final, "scene_reconstruction_final")
+
+        if initial_path.exists() and initial_final_cache.exists():
+            _log_stage(self.config, "5/8 Initial human generation pass (resumed)")
+            initial_pass_image = load_image(str(initial_path))
+            initial_final = _load_tensor(initial_final_cache, device=self.device, dtype=self.dtype)
+        else:
+            _log_stage(self.config, "5/8 Initial human generation pass")
+            initial_pass = run_denoise_trajectory(
+                pipe=self.pipe,
+                start_latents=scene_inv_start,
+                prompt_embeds=edit_prompt_embeds,
+                guidance_scale=self.config.edit_guidance_scale,
+                num_inference_steps=self.config.num_inference_steps,
+                stage_name="Initial human pass",
+                show_progress_bar=self.config.show_progress_bar,
+            )
+            initial_final = initial_pass.final_latents
+            initial_pass_image = latents_to_image(self.pipe, initial_final)
+            initial_pass_image.save(initial_path)
+            # Backward-compatibility alias for previous filename.
+            initial_pass_image.save(affordance_path)
+            _save_tensor(initial_final_cache, initial_final)
+        if not affordance_path.exists():
+            initial_pass_image.save(affordance_path)
+        _ensure_finite(initial_final, "initial_final")
+
+        if fg_mask_path.exists() and fg_mask_cache.exists():
+            _log_stage(self.config, "6/8 Foreground mask extraction (resumed)")
+            foreground_mask = np.load(fg_mask_cache).astype(np.float32)
         else:
             _log_stage(self.config, "6/8 Foreground mask extraction from initial pass")
             foreground_mask = self.diff_mask_extractor.extract(initial_pass_image, scene_reconstruction_image)
+            _mask_to_pil(foreground_mask).save(fg_mask_path)
+            np.save(fg_mask_cache, foreground_mask.astype(np.float32))
 
-        if reference_mask_path:
+        if reference_mask_path and Path(reference_mask_path).exists():
             _log_stage(self.config, "7/8 Loading reference mask override")
             reference_mask = load_binary_mask(
                 path=reference_mask_path,
                 target_size=reference_image.size,
                 invert=reference_mask_invert,
             )
+            _mask_to_pil(reference_mask).save(ref_mask_path)
+            np.save(ref_mask_cache, reference_mask.astype(np.float32))
+        elif ref_mask_path.exists() and ref_mask_cache.exists():
+            _log_stage(self.config, "7/8 Reference mask extraction (resumed)")
+            reference_mask = np.load(ref_mask_cache).astype(np.float32)
         else:
             _log_stage(self.config, "7/8 Reference mask extraction")
             reference_mask = reference_person_mask(reference_image, self.reference_mask_extractor)
+            _mask_to_pil(reference_mask).save(ref_mask_path)
+            np.save(ref_mask_cache, reference_mask.astype(np.float32))
+
         reference_mask_tensor = torch.from_numpy(reference_mask).to(device=self.device, dtype=self.dtype)
+        fg_mask_latent = build_latent_masks(
+            foreground_mask,
+            latent_shape=scene_inv_start.shape,
+            device=self.device,
+            dtype=self.dtype,
+        )
+
+        if final_path.exists():
+            _log_stage(self.config, "8/8 Final output already exists (resumed)")
+            return outputs
 
         blend_window = BlendWindow(
             start_step=self.config.blend_start_step,
             end_step=min(self.config.blend_end_step, self.config.num_inference_steps - 1),
         )
-        fg_mask_latent = build_latent_masks(
-            foreground_mask,
-            latent_shape=scene_inv.start_latents.shape,
-            device=self.device,
-            dtype=self.dtype,
-        )
         blender = LatentBlender(
-            scene_trajectory=scene_reconstruction.latents_by_timestep,
+            scene_trajectory=scene_reconstruction_traj,
             fg_mask_latent=fg_mask_latent,
             window=blend_window,
         )
@@ -236,7 +311,7 @@ class TeleportraitsPipeline:
                 controller.set_mode(controller.MODE_CAPTURE)
                 run_denoise_trajectory(
                     pipe=self.pipe,
-                    start_latents=reference_inv.start_latents,
+                    start_latents=reference_inv_start,
                     prompt_embeds=reference_prompt_embeds,
                     guidance_scale=1.0,
                     num_inference_steps=self.config.num_inference_steps,
@@ -244,13 +319,12 @@ class TeleportraitsPipeline:
                     stage_name="Capture reference K/V",
                     show_progress_bar=self.config.show_progress_bar,
                 )
-
                 controller.set_mode(controller.MODE_INJECT)
 
             _log_stage(self.config, "8/8 Final pass with latent blending")
             final_pass = run_denoise_trajectory(
                 pipe=self.pipe,
-                start_latents=scene_inv.start_latents,
+                start_latents=scene_inv_start,
                 prompt_embeds=edit_prompt_embeds,
                 guidance_scale=self.config.edit_guidance_scale,
                 num_inference_steps=self.config.num_inference_steps,
@@ -265,31 +339,8 @@ class TeleportraitsPipeline:
                 restore_processors(self.pipe, original_processors)
 
         final_image = latents_to_image(self.pipe, final_pass.final_latents)
-
-        final_path = output_path / "final.png"
-        initial_path = output_path / "initial_pass.png"
-        affordance_path = output_path / "affordance_pass.png"
-        scene_recon_path = output_path / "scene_reconstruction.png"
-        fg_mask_path = output_path / "foreground_mask.png"
-        ref_mask_path = output_path / "reference_mask.png"
-
         final_image.save(final_path)
-        initial_pass_image.save(initial_path)
-        # Backward-compatibility alias for previous filename.
-        initial_pass_image.save(affordance_path)
-        scene_reconstruction_image.save(scene_recon_path)
-        _mask_to_pil(foreground_mask).save(fg_mask_path)
-        _mask_to_pil(reference_mask).save(ref_mask_path)
-
-        return {
-            "final": str(final_path),
-            "initial_pass": str(initial_path),
-            "affordance_pass": str(affordance_path),
-            "scene_reconstruction": str(scene_recon_path),
-            "foreground_mask": str(fg_mask_path),
-            "reference_mask": str(ref_mask_path),
-            "resolved_edit_prompt": resolved_edit_prompt,
-        }
+        return outputs
 
 
 def _resize_to_multiple_of_8(image: Image.Image) -> Image.Image:
@@ -304,6 +355,34 @@ def _resize_to_multiple_of_8(image: Image.Image) -> Image.Image:
 def _mask_to_pil(mask: np.ndarray) -> Image.Image:
     arr = np.clip(mask * 255.0, 0, 255).astype(np.uint8)
     return Image.fromarray(arr, mode="L")
+
+
+def _save_tensor(path: Path, tensor: torch.Tensor) -> None:
+    torch.save(tensor.detach().cpu(), path)
+
+
+def _load_tensor(path: Path, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+    tensor = torch.load(path, map_location="cpu")
+    if not isinstance(tensor, torch.Tensor):
+        raise ValueError(f"Expected tensor in {path}, got {type(tensor)}")
+    return tensor.to(device=device, dtype=dtype)
+
+
+def _save_tensor_dict(path: Path, tensor_dict: Dict[int, torch.Tensor]) -> None:
+    serializable = {int(k): v.detach().cpu() for k, v in tensor_dict.items()}
+    torch.save(serializable, path)
+
+
+def _load_tensor_dict(path: Path, device: torch.device, dtype: torch.dtype) -> Dict[int, torch.Tensor]:
+    obj = torch.load(path, map_location="cpu")
+    if not isinstance(obj, dict):
+        raise ValueError(f"Expected dict in {path}, got {type(obj)}")
+    out: Dict[int, torch.Tensor] = {}
+    for k, v in obj.items():
+        if not isinstance(v, torch.Tensor):
+            raise ValueError(f"Expected tensor values in {path}, got {type(v)} at key {k}")
+        out[int(k)] = v.to(device=device, dtype=dtype)
+    return out
 
 
 def _log_stage(config: TeleportraitConfig, message: str) -> None:
