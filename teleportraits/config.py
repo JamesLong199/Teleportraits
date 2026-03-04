@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Tuple
+from typing import Optional, Tuple
 
 
 @dataclass
@@ -12,6 +12,7 @@ class TeleportraitConfig:
 
     inversion_guidance_scale: float = 1.0
     inversion_fixed_point_iters: int = 2
+    inversion_prompt: Optional[str] = None
 
     edit_guidance_scale: float = 7.5
     negative_prompt: str = ""

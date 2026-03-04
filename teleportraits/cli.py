@@ -42,6 +42,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser.add_argument("--inversion-guidance-scale", type=float, default=1.0)
     parser.add_argument("--inversion-fixed-point-iters", type=int, default=2)
+    parser.add_argument(
+        "--inversion-prompt",
+        default=None,
+        help="Optional prompt override for scene inversion only. If omitted, uses --scene-prompt.",
+    )
 
     parser.add_argument("--edit-guidance-scale", type=float, default=7.5)
     parser.add_argument("--negative-prompt", default="")
@@ -80,6 +85,7 @@ def main() -> None:
         image_size=args.image_size,
         inversion_guidance_scale=args.inversion_guidance_scale,
         inversion_fixed_point_iters=args.inversion_fixed_point_iters,
+        inversion_prompt=args.inversion_prompt,
         edit_guidance_scale=args.edit_guidance_scale,
         negative_prompt=args.negative_prompt,
         blend_start_step=args.blend_start_step,

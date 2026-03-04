@@ -124,14 +124,20 @@ class TeleportraitsPipeline:
             explicit_edit_prompt=edit_prompt,
             placeholder=person_placeholder,
         )
+        resolved_scene_inversion_prompt = (
+            self.config.inversion_prompt.strip()
+            if self.config.inversion_prompt is not None and self.config.inversion_prompt.strip()
+            else scene_prompt.strip()
+        )
         resolved_initial_prompt = scene_prompt.strip()
         inversion_do_cfg = self.config.inversion_guidance_scale != 1.0
         outputs["resolved_edit_prompt"] = resolved_edit_prompt
         outputs["resolved_initial_prompt"] = resolved_initial_prompt
+        outputs["resolved_scene_inversion_prompt"] = resolved_scene_inversion_prompt
 
         scene_prompt_embeds_inv = encode_prompt_sdxl(
             self.pipe,
-            prompt=scene_prompt,
+            prompt=resolved_scene_inversion_prompt,
             negative_prompt=self.config.negative_prompt,
             image_size=scene_image.size,
             device=self.device,
@@ -160,6 +166,15 @@ class TeleportraitsPipeline:
             image_size=scene_image.size,
             device=self.device,
             do_cfg=True,
+        )
+        _log_inversion_config(
+            config=self.config,
+            scheduler=self.pipe.scheduler,
+            scene_image_size=scene_image.size,
+            reference_image_size=reference_image.size,
+            inversion_do_cfg=inversion_do_cfg,
+            scene_inversion_prompt=resolved_scene_inversion_prompt,
+            reference_inversion_prompt=reference_prompt.strip(),
         )
 
         if scene_inv_cache.exists():
@@ -404,6 +419,45 @@ def _load_tensor_dict(path: Path, device: torch.device, dtype: torch.dtype) -> D
 def _log_stage(config: TeleportraitConfig, message: str) -> None:
     if config.verbose:
         print(f"[Teleportraits] {message}", flush=True)
+
+
+def _log_inversion_config(
+    config: TeleportraitConfig,
+    scheduler: DDIMScheduler,
+    scene_image_size: tuple[int, int],
+    reference_image_size: tuple[int, int],
+    inversion_do_cfg: bool,
+    scene_inversion_prompt: str,
+    reference_inversion_prompt: str,
+) -> None:
+    if not config.verbose:
+        return
+
+    scheduler_config = getattr(scheduler, "config", None)
+    prediction_type = getattr(scheduler_config, "prediction_type", "unknown")
+    beta_schedule = getattr(scheduler_config, "beta_schedule", "unknown")
+    timestep_spacing = getattr(scheduler_config, "timestep_spacing", "unknown")
+    set_alpha_to_one = getattr(scheduler_config, "set_alpha_to_one", "unknown")
+    steps_offset = getattr(scheduler_config, "steps_offset", "unknown")
+
+    print("[Teleportraits] Inversion debug:", flush=True)
+    print(f"[Teleportraits]   scheduler={scheduler.__class__.__name__}", flush=True)
+    print(f"[Teleportraits]   prediction_type={prediction_type}", flush=True)
+    print(f"[Teleportraits]   beta_schedule={beta_schedule}", flush=True)
+    print(f"[Teleportraits]   timestep_spacing={timestep_spacing}", flush=True)
+    print(f"[Teleportraits]   set_alpha_to_one={set_alpha_to_one}", flush=True)
+    print(f"[Teleportraits]   steps_offset={steps_offset}", flush=True)
+    print(f"[Teleportraits]   num_inference_steps={config.num_inference_steps}", flush=True)
+    print(f"[Teleportraits]   inversion_guidance_scale={config.inversion_guidance_scale}", flush=True)
+    print(f"[Teleportraits]   inversion_fixed_point_iters={config.inversion_fixed_point_iters}", flush=True)
+    print(f"[Teleportraits]   inversion_do_cfg={inversion_do_cfg}", flush=True)
+    print(f"[Teleportraits]   image_size_cfg={config.image_size}", flush=True)
+    print(f"[Teleportraits]   scene_image_size={scene_image_size[0]}x{scene_image_size[1]}", flush=True)
+    print(f"[Teleportraits]   reference_image_size={reference_image_size[0]}x{reference_image_size[1]}", flush=True)
+    print(f"[Teleportraits]   device={config.device}", flush=True)
+    print(f"[Teleportraits]   torch_dtype={config.torch_dtype}", flush=True)
+    print(f"[Teleportraits]   scene_inversion_prompt={scene_inversion_prompt}", flush=True)
+    print(f"[Teleportraits]   reference_inversion_prompt={reference_inversion_prompt}", flush=True)
 
 
 def _resolve_run_output_dir(base_output_dir: Path, config: TeleportraitConfig) -> Path:
