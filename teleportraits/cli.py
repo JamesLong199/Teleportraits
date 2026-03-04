@@ -23,6 +23,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Invert the provided reference mask (useful if your mask uses black=subject).",
     )
     parser.add_argument("--scene-prompt", required=True, help="Prompt describing the scene")
+    parser.add_argument(
+        "--foreground-mask-image",
+        default=None,
+        help="Optional binary/gray mask for scene insertion region (white=foreground/subject region).",
+    )
+    parser.add_argument(
+        "--foreground-mask-invert",
+        action="store_true",
+        help="Invert the provided foreground mask (useful if your mask uses black=foreground).",
+    )
     parser.add_argument("--reference-prompt", required=True, help="Prompt describing the reference subject")
     parser.add_argument(
         "--edit-prompt",
@@ -40,13 +50,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--num-inference-steps", type=int, default=50)
 
     parser.add_argument("--inversion-guidance-scale", type=float, default=1.0)
-    parser.add_argument("--inversion-fixed-point-iters", type=int, default=5)
+    parser.add_argument("--inversion-fixed-point-iters", type=int, default=2)
 
-    parser.add_argument("--edit-guidance-scale", type=float, default=9.0)
+    parser.add_argument("--edit-guidance-scale", type=float, default=7.5)
     parser.add_argument("--negative-prompt", default="")
 
-    parser.add_argument("--blend-start-step", type=int, default=15)
-    parser.add_argument("--blend-end-step", type=int, default=40)
+    parser.add_argument("--blend-start-step", type=int, default=10)
+    parser.add_argument("--blend-end-step", type=int, default=20)
 
     parser.add_argument("--attention-enabled", action="store_true", dest="attention_enabled")
     parser.add_argument("--attention-disabled", action="store_false", dest="attention_enabled")
@@ -64,6 +74,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--torch-dtype", default="float16")
+    parser.add_argument("--quiet", action="store_true", help="Reduce stage logging.")
+    parser.add_argument("--no-progress-bar", action="store_true", help="Disable diffusion progress bars.")
 
     return parser
 
@@ -86,6 +98,8 @@ def main() -> None:
         mask_threshold=args.mask_threshold,
         mask_min_area_ratio=args.mask_min_area_ratio,
         use_transformers_reference_mask=args.use_transformers_reference_mask,
+        verbose=not args.quiet,
+        show_progress_bar=not args.no_progress_bar,
         device=args.device,
         torch_dtype=args.torch_dtype,
     )
@@ -96,6 +110,8 @@ def main() -> None:
         reference_image_path=args.reference_image,
         reference_mask_path=args.reference_mask_image,
         reference_mask_invert=args.reference_mask_invert,
+        foreground_mask_path=args.foreground_mask_image,
+        foreground_mask_invert=args.foreground_mask_invert,
         scene_prompt=args.scene_prompt,
         reference_prompt=args.reference_prompt,
         edit_prompt=args.edit_prompt,

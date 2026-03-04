@@ -10,13 +10,13 @@ class TeleportraitConfig:
     num_inference_steps: int = 50
 
     inversion_guidance_scale: float = 1.0
-    inversion_fixed_point_iters: int = 5
+    inversion_fixed_point_iters: int = 2
 
-    edit_guidance_scale: float = 9.0
+    edit_guidance_scale: float = 7.5
     negative_prompt: str = ""
 
-    blend_start_step: int = 15
-    blend_end_step: int = 40
+    blend_start_step: int = 10
+    blend_end_step: int = 20
 
     attention_enabled: bool = True
     attention_inject_start_step: int = 0
@@ -26,6 +26,9 @@ class TeleportraitConfig:
     mask_threshold: float = 0.08
     mask_min_area_ratio: float = 0.001
     use_transformers_reference_mask: bool = False
+
+    verbose: bool = True
+    show_progress_bar: bool = True
 
     seed: int = 0
     torch_dtype: str = "float16"

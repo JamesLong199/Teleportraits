@@ -41,6 +41,7 @@ pip install -e .
 teleportraits \
   --scene-image /path/to/scene.jpg \
   --reference-image /path/to/person.jpg \
+  --foreground-mask-image /path/to/scene_person_mask.png \
   --reference-mask-image /path/to/person_mask.png \
   --scene-prompt "a wide-angle city street at sunset with a person near the crosswalk" \
   --reference-prompt "a full-body photo of a woman in a red coat" \
@@ -52,20 +53,29 @@ By default, the insertion prompt is composed in paper style by replacing `a pers
 Key outputs:
 
 - `final.png`: final insertion result.
-- `affordance_pass.png`: first-pass generation used for mask extraction.
+- `initial_pass.png`: initial human generation pass used for mask extraction.
+- `affordance_pass.png`: backward-compatible alias of `initial_pass.png`.
 - `scene_reconstruction.png`: reconstructed scene from inversion trajectory.
 - `foreground_mask.png`: foreground mask used for latent blending.
 - `reference_mask.png`: reference subject mask used for K/V masking.
 
 If `--reference-mask-image` is provided, it is used directly and segmentation is skipped.
+If `--foreground-mask-image` is provided, it is used directly and affordance-difference extraction is skipped.
 
 ## Recommended Defaults
 
 - Base model: `stabilityai/stable-diffusion-xl-base-1.0`
 - Scheduler: `DDIMScheduler`
 - Inference steps: `50`
-- Edit guidance scale: start around `7.5` to `12.0`
-- Blend window (step indices): start around `15`, end around `40`
+- Edit guidance scale: `7.5` (paper-like starting point)
+- Blend window (step indices): `10` to `20` (paper-like starting point)
+
+## Progress Output
+
+- Stage logs are printed by default.
+- Diffusion/inversion progress bars are shown by default.
+- Use `--quiet` to reduce stage logs.
+- Use `--no-progress-bar` to disable tqdm bars.
 
 ## Disclaimer
 

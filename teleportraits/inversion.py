@@ -5,6 +5,7 @@ from typing import Dict, List
 
 import torch
 from diffusers import StableDiffusionXLPipeline
+from tqdm.auto import tqdm
 
 from teleportraits.types import PromptEmbeds
 
@@ -23,6 +24,8 @@ def ddim_fixed_point_invert(
     guidance_scale: float,
     num_inference_steps: int,
     fixed_point_iters: int,
+    stage_name: str = "DDIM inversion",
+    show_progress_bar: bool = True,
 ) -> InversionResult:
     device = clean_latents.device
     dtype = clean_latents.dtype
@@ -38,7 +41,17 @@ def ddim_fixed_point_invert(
     prev_t = 0
     latents_by_timestep[0] = x_prev.detach().clone()
 
-    for curr_t in timesteps_asc:
+    step_iter = timesteps_asc
+    if show_progress_bar:
+        step_iter = tqdm(
+            timesteps_asc,
+            total=len(timesteps_asc),
+            desc=stage_name,
+            leave=False,
+            dynamic_ncols=True,
+        )
+
+    for curr_t in step_iter:
         if curr_t == 0:
             prev_t = 0
             continue

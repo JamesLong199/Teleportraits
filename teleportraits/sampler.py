@@ -4,6 +4,7 @@ from typing import Callable, Optional
 
 import torch
 from diffusers import StableDiffusionXLPipeline
+from tqdm.auto import tqdm
 
 from teleportraits.types import PromptEmbeds, TrajectoryResult
 
@@ -18,6 +19,8 @@ def run_denoise_trajectory(
     num_inference_steps: int,
     attn_controller: Optional[object] = None,
     post_step_hook: Optional[PostStepHook] = None,
+    stage_name: str = "Denoising",
+    show_progress_bar: bool = True,
 ) -> TrajectoryResult:
     device = start_latents.device
     pipe.scheduler.set_timesteps(num_inference_steps, device=device)
@@ -26,7 +29,19 @@ def run_denoise_trajectory(
     latents = start_latents
     latents_by_timestep = {}
 
-    for i, t in enumerate(timesteps):
+    step_iter = enumerate(timesteps)
+    if show_progress_bar:
+        step_iter = enumerate(
+            tqdm(
+                timesteps,
+                total=len(timesteps),
+                desc=stage_name,
+                leave=False,
+                dynamic_ncols=True,
+            )
+        )
+
+    for i, t in step_iter:
         t_int = int(t.item())
         latents_by_timestep[t_int] = latents.detach().clone()
 
