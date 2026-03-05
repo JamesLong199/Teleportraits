@@ -59,6 +59,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.set_defaults(attention_enabled=True)
     parser.add_argument("--attention-inject-start-step", type=int, default=0)
     parser.add_argument("--attention-inject-end-step", type=int, default=49)
+    parser.add_argument(
+        "--affordance-only",
+        action="store_true",
+        help="Run only scene inversion, scene reconstruction, and initial/affordance pass, then stop.",
+    )
 
     parser.add_argument("--mask-threshold", type=float, default=0.08)
     parser.add_argument("--mask-min-area-ratio", type=float, default=0.001)
@@ -93,6 +98,7 @@ def main() -> None:
         attention_enabled=args.attention_enabled,
         attention_inject_start_step=args.attention_inject_start_step,
         attention_inject_end_step=args.attention_inject_end_step,
+        affordance_only=args.affordance_only,
         mask_threshold=args.mask_threshold,
         mask_min_area_ratio=args.mask_min_area_ratio,
         use_transformers_reference_mask=args.use_transformers_reference_mask,

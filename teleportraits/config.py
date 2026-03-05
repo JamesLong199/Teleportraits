@@ -24,6 +24,7 @@ class TeleportraitConfig:
     attention_inject_start_step: int = 0
     attention_inject_end_step: int = 49
     attention_target_prefixes: Tuple[str, ...] = ("up_blocks.1", "up_blocks.2")
+    affordance_only: bool = False
 
     mask_threshold: float = 0.08
     mask_min_area_ratio: float = 0.001

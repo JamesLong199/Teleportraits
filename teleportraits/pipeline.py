@@ -274,6 +274,14 @@ class TeleportraitsPipeline:
             initial_pass_image.save(affordance_path)
         _ensure_finite(initial_final, "initial_final")
 
+        if self.config.affordance_only:
+            _log_stage(
+                self.config,
+                "6/8-8/8 Skipped: affordance-only mode (stopped after scene inversion/reconstruction/initial pass)",
+            )
+            outputs["pipeline_mode"] = "affordance_only"
+            return outputs
+
         if fg_mask_path.exists() and fg_mask_cache.exists():
             _log_stage(self.config, "6/8 Foreground mask extraction (resumed)")
             foreground_mask = np.load(fg_mask_cache).astype(np.float32)
