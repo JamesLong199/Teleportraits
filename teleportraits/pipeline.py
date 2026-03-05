@@ -207,6 +207,7 @@ class TeleportraitsPipeline:
             do_cfg=inversion_do_cfg,
         )
         reference_prompt_embeds_inv: Optional[PromptEmbeds] = None
+        reference_prompt_embeds_attn: Optional[PromptEmbeds] = None
         if not self.config.affordance_only:
             reference_prompt_embeds_inv = encode_prompt_sdxl(
                 self.pipe,
@@ -216,6 +217,16 @@ class TeleportraitsPipeline:
                 device=self.device,
                 do_cfg=inversion_do_cfg,
             )
+            if self.config.attention_enabled:
+                # Attention capture needs CFG batch split (uncond/cond) so conditional K/V can be stored.
+                reference_prompt_embeds_attn = encode_prompt_sdxl(
+                    self.pipe,
+                    prompt=reference_prompt,
+                    negative_prompt=resolved_negative_prompt,
+                    image_size=reference_image.size,
+                    device=self.device,
+                    do_cfg=True,
+                )
         initial_prompt_embeds = encode_prompt_sdxl(
             self.pipe,
             prompt=resolved_initial_prompt,
@@ -430,14 +441,14 @@ class TeleportraitsPipeline:
 
         try:
             if self.config.attention_enabled:
-                if reference_inv_start is None or reference_prompt_embeds_inv is None:
+                if reference_inv_start is None or reference_prompt_embeds_attn is None:
                     raise RuntimeError("Reference inversion artifacts are required for attention capture.")
                 _log_stage(self.config, "8/8 Reference attention capture")
                 controller.set_mode(controller.MODE_CAPTURE)
                 run_denoise_trajectory(
                     pipe=self.pipe,
                     start_latents=reference_inv_start,
-                    prompt_embeds=reference_prompt_embeds_inv,
+                    prompt_embeds=reference_prompt_embeds_attn,
                     guidance_scale=1.0,
                     num_inference_steps=self.config.num_inference_steps,
                     attn_controller=controller,
