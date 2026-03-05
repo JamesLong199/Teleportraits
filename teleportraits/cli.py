@@ -19,6 +19,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--scene-image", required=True, help="Path to scene image")
     parser.add_argument("--reference-image", required=True, help="Path to reference person image")
     parser.add_argument(
+        "--foreground-mask-image",
+        default=None,
+        help=(
+            "Optional user-provided foreground mask for the scene (white=person region). "
+            "If provided, initial/affordance pass and automatic foreground mask extraction are skipped."
+        ),
+    )
+    parser.add_argument(
         "--reference-mask-image",
         default=None,
         help="Optional binary/gray mask for the reference image (white=subject, black=background).",
@@ -113,6 +121,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
+    if args.affordance_only and args.foreground_mask_image:
+        raise ValueError("--affordance-only cannot be combined with --foreground-mask-image.")
 
     config = TeleportraitConfig(
         model_id=args.model_id,
@@ -146,6 +156,7 @@ def main() -> None:
     outputs = pipeline.run(
         scene_image_path=args.scene_image,
         reference_image_path=args.reference_image,
+        foreground_mask_path=args.foreground_mask_image,
         reference_mask_path=args.reference_mask_image,
         reference_mask_invert=args.reference_mask_invert,
         scene_prompt=args.scene_prompt,

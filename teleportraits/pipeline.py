@@ -82,6 +82,7 @@ class TeleportraitsPipeline:
         self,
         scene_image_path: str,
         reference_image_path: str,
+        foreground_mask_path: Optional[str],
         reference_mask_path: Optional[str],
         reference_mask_invert: bool,
         scene_prompt: str,
@@ -128,6 +129,10 @@ class TeleportraitsPipeline:
         outputs["foreground_mask_prompt"] = self.config.foreground_mask_prompt
         outputs["sam3_checkpoint_dir"] = self.config.sam3_checkpoint_dir or ""
         outputs["sam3_conda_env"] = self.config.sam3_conda_env
+        use_user_foreground_mask = bool(foreground_mask_path and Path(foreground_mask_path).exists())
+        if foreground_mask_path and not use_user_foreground_mask:
+            raise FileNotFoundError(f"Foreground mask override not found: {foreground_mask_path}")
+        outputs["user_foreground_mask_path"] = foreground_mask_path or ""
 
         _log_stage(self.config, "0/8 Loading inputs")
         scene_image = _resize_for_model(load_image(scene_image_path), target_size=self.config.image_size)
@@ -162,6 +167,7 @@ class TeleportraitsPipeline:
             "inputs": {
                 "scene_image_path": scene_image_path,
                 "reference_image_path": reference_image_path,
+                "foreground_mask_path": foreground_mask_path,
                 "reference_mask_path": reference_mask_path,
                 "reference_mask_invert": reference_mask_invert,
                 "scene_prompt": scene_prompt,
@@ -296,7 +302,11 @@ class TeleportraitsPipeline:
             _save_tensor_dict(scene_recon_traj_cache, scene_reconstruction_traj)
         _ensure_finite(scene_reconstruction_final, "scene_reconstruction_final")
 
-        if initial_path.exists() and initial_final_cache.exists():
+        initial_pass_image: Optional[Image.Image] = None
+        initial_final: Optional[torch.Tensor] = None
+        if use_user_foreground_mask:
+            _log_stage(self.config, "5/8 Initial human generation pass (skipped: user foreground mask provided)")
+        elif initial_path.exists() and initial_final_cache.exists():
             _log_stage(self.config, "5/8 Initial human generation pass (resumed)")
             initial_pass_image = load_image(str(initial_path))
             initial_final = _load_tensor(initial_final_cache, device=self.device, dtype=self.dtype)
@@ -317,9 +327,10 @@ class TeleportraitsPipeline:
             # Backward-compatibility alias for previous filename.
             initial_pass_image.save(affordance_path)
             _save_tensor(initial_final_cache, initial_final)
-        if not affordance_path.exists():
+        if initial_pass_image is not None and not affordance_path.exists():
             initial_pass_image.save(affordance_path)
-        _ensure_finite(initial_final, "initial_final")
+        if initial_final is not None:
+            _ensure_finite(initial_final, "initial_final")
 
         if self.config.affordance_only:
             _log_stage(
@@ -329,11 +340,23 @@ class TeleportraitsPipeline:
             outputs["pipeline_mode"] = "affordance_only"
             return outputs
 
-        if fg_mask_path.exists() and fg_mask_cache.exists():
+        if use_user_foreground_mask:
+            _log_stage(self.config, "6/8 Loading foreground mask override")
+            foreground_mask = load_binary_mask(
+                path=str(foreground_mask_path),
+                target_size=scene_image.size,
+                invert=False,
+            )
+            _mask_to_pil(foreground_mask).save(fg_mask_path)
+            np.save(fg_mask_cache, foreground_mask.astype(np.float32))
+            outputs["pipeline_mode"] = "user_foreground_mask"
+        elif fg_mask_path.exists() and fg_mask_cache.exists():
             _log_stage(self.config, "6/8 Foreground mask extraction (resumed)")
             foreground_mask = np.load(fg_mask_cache).astype(np.float32)
         else:
             _log_stage(self.config, "6/8 Foreground mask extraction from initial pass (SAM3)")
+            if initial_pass_image is None:
+                raise RuntimeError("Initial pass image is required for automatic foreground mask extraction.")
             foreground_mask = self.foreground_mask_extractor.extract(initial_pass_image, scene_reconstruction_image)
             _mask_to_pil(foreground_mask).save(fg_mask_path)
             np.save(fg_mask_cache, foreground_mask.astype(np.float32))
