@@ -34,6 +34,7 @@ from teleportraits.segmentation import (
     TransformersPersonMaskExtractor,
     reference_person_mask,
 )
+from teleportraits.types import PromptEmbeds
 
 
 class TeleportraitsPipeline:
@@ -149,14 +150,16 @@ class TeleportraitsPipeline:
             device=self.device,
             do_cfg=inversion_do_cfg,
         )
-        reference_prompt_embeds_inv = encode_prompt_sdxl(
-            self.pipe,
-            prompt=reference_prompt,
-            negative_prompt=self.config.negative_prompt,
-            image_size=reference_image.size,
-            device=self.device,
-            do_cfg=inversion_do_cfg,
-        )
+        reference_prompt_embeds_inv: Optional[PromptEmbeds] = None
+        if not self.config.affordance_only:
+            reference_prompt_embeds_inv = encode_prompt_sdxl(
+                self.pipe,
+                prompt=reference_prompt,
+                negative_prompt=self.config.negative_prompt,
+                image_size=reference_image.size,
+                device=self.device,
+                do_cfg=inversion_do_cfg,
+            )
         initial_prompt_embeds = encode_prompt_sdxl(
             self.pipe,
             prompt=resolved_initial_prompt,
@@ -203,25 +206,29 @@ class TeleportraitsPipeline:
             _save_tensor(scene_inv_cache, scene_inv_start)
         _ensure_finite(scene_inv_start, "scene_inv_start")
 
-        if reference_inv_cache.exists():
-            _log_stage(self.config, "3/8 DDIM inversion: reference (resumed)")
-            reference_inv_start = _load_tensor(reference_inv_cache, device=self.device, dtype=self.dtype)
+        reference_inv_start: Optional[torch.Tensor] = None
+        if self.config.affordance_only:
+            _log_stage(self.config, "3/8 DDIM inversion: reference (skipped: affordance-only mode)")
         else:
-            _log_stage(self.config, "3/8 DDIM inversion: reference")
-            reference_latents = image_to_latents(self.pipe, reference_image, device=self.device, dtype=self.dtype)
-            reference_inv = ddim_fixed_point_invert(
-                pipe=self.pipe,
-                clean_latents=reference_latents,
-                prompt_embeds=reference_prompt_embeds_inv,
-                guidance_scale=self.config.inversion_guidance_scale,
-                num_inference_steps=self.config.num_inference_steps,
-                fixed_point_iters=self.config.inversion_fixed_point_iters,
-                stage_name="Invert reference",
-                show_progress_bar=self.config.show_progress_bar,
-            )
-            reference_inv_start = reference_inv.start_latents
-            _save_tensor(reference_inv_cache, reference_inv_start)
-        _ensure_finite(reference_inv_start, "reference_inv_start")
+            if reference_inv_cache.exists():
+                _log_stage(self.config, "3/8 DDIM inversion: reference (resumed)")
+                reference_inv_start = _load_tensor(reference_inv_cache, device=self.device, dtype=self.dtype)
+            else:
+                _log_stage(self.config, "3/8 DDIM inversion: reference")
+                reference_latents = image_to_latents(self.pipe, reference_image, device=self.device, dtype=self.dtype)
+                reference_inv = ddim_fixed_point_invert(
+                    pipe=self.pipe,
+                    clean_latents=reference_latents,
+                    prompt_embeds=reference_prompt_embeds_inv,
+                    guidance_scale=self.config.inversion_guidance_scale,
+                    num_inference_steps=self.config.num_inference_steps,
+                    fixed_point_iters=self.config.inversion_fixed_point_iters,
+                    stage_name="Invert reference",
+                    show_progress_bar=self.config.show_progress_bar,
+                )
+                reference_inv_start = reference_inv.start_latents
+                _save_tensor(reference_inv_cache, reference_inv_start)
+            _ensure_finite(reference_inv_start, "reference_inv_start")
 
         if scene_recon_path.exists() and scene_recon_final_cache.exists() and scene_recon_traj_cache.exists():
             _log_stage(self.config, "4/8 Scene reconstruction (resumed)")
@@ -349,6 +356,8 @@ class TeleportraitsPipeline:
 
         try:
             if self.config.attention_enabled:
+                if reference_inv_start is None or reference_prompt_embeds_inv is None:
+                    raise RuntimeError("Reference inversion artifacts are required for attention capture.")
                 _log_stage(self.config, "8/8 Reference attention capture")
                 controller.set_mode(controller.MODE_CAPTURE)
                 run_denoise_trajectory(
