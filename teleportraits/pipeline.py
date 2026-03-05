@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
+from dataclasses import asdict
 from datetime import datetime
 import inspect
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 import numpy as np
 import torch
@@ -30,7 +32,7 @@ from teleportraits.sdxl_utils import (
     parse_dtype,
 )
 from teleportraits.segmentation import (
-    DifferenceMaskExtractor,
+    Sam3ForegroundMaskExtractor,
     TransformersPersonMaskExtractor,
     reference_person_mask,
 )
@@ -60,9 +62,13 @@ class TeleportraitsPipeline:
         )
         self.pipe = self.pipe.to(self.device)
 
-        self.diff_mask_extractor = DifferenceMaskExtractor(
-            threshold=config.mask_threshold,
+        self.foreground_mask_extractor = Sam3ForegroundMaskExtractor(
+            prompt=config.foreground_mask_prompt,
+            confidence_threshold=config.foreground_mask_confidence_threshold,
             min_area_ratio=config.mask_min_area_ratio,
+            device=config.device,
+            checkpoint_dir=config.sam3_checkpoint_dir,
+            conda_env=config.sam3_conda_env,
         )
 
         self.reference_mask_extractor: Optional[TransformersPersonMaskExtractor]
@@ -97,6 +103,7 @@ class TeleportraitsPipeline:
         fg_mask_path = output_path / "foreground_mask.png"
         ref_mask_path = output_path / "reference_mask.png"
         final_path = output_path / "final.png"
+        run_config_path = output_path / "run_config.json"
 
         scene_inv_cache = cache_path / "scene_inv_start_latents.pt"
         reference_inv_cache = cache_path / "reference_inv_start_latents.pt"
@@ -116,7 +123,11 @@ class TeleportraitsPipeline:
             "foreground_mask": str(fg_mask_path),
             "reference_mask": str(ref_mask_path),
             "final": str(final_path),
+            "run_config": str(run_config_path),
         }
+        outputs["foreground_mask_prompt"] = self.config.foreground_mask_prompt
+        outputs["sam3_checkpoint_dir"] = self.config.sam3_checkpoint_dir or ""
+        outputs["sam3_conda_env"] = self.config.sam3_conda_env
 
         _log_stage(self.config, "0/8 Loading inputs")
         scene_image = _resize_for_model(load_image(scene_image_path), target_size=self.config.image_size)
@@ -137,15 +148,44 @@ class TeleportraitsPipeline:
             else scene_prompt.strip()
         )
         resolved_initial_prompt = scene_prompt.strip()
+        resolved_negative_prompt = self.config.negative_prompt.strip()
+        if resolved_negative_prompt:
+            _log_stage(self.config, f'Negative prompt enabled: "{resolved_negative_prompt}"')
+        else:
+            _log_stage(self.config, "Negative prompt disabled (empty).")
         inversion_do_cfg = self.config.inversion_guidance_scale != 1.0
         outputs["resolved_edit_prompt"] = resolved_edit_prompt
         outputs["resolved_initial_prompt"] = resolved_initial_prompt
         outputs["resolved_scene_inversion_prompt"] = resolved_scene_inversion_prompt
+        outputs["resolved_negative_prompt"] = resolved_negative_prompt
+        run_config: Dict[str, Any] = {
+            "inputs": {
+                "scene_image_path": scene_image_path,
+                "reference_image_path": reference_image_path,
+                "reference_mask_path": reference_mask_path,
+                "reference_mask_invert": reference_mask_invert,
+                "scene_prompt": scene_prompt,
+                "reference_prompt": reference_prompt,
+                "edit_prompt": edit_prompt,
+                "person_placeholder": person_placeholder,
+                "output_dir": output_dir,
+            },
+            "resolved_inputs": {
+                "scene_inversion_prompt": resolved_scene_inversion_prompt,
+                "initial_prompt": resolved_initial_prompt,
+                "edit_prompt": resolved_edit_prompt,
+                "negative_prompt": resolved_negative_prompt,
+                "scene_image_size": list(scene_image.size),
+                "reference_image_size": list(reference_image.size),
+            },
+            "hyperparameters": asdict(self.config),
+        }
+        _save_json(run_config_path, run_config)
 
         scene_prompt_embeds_inv = encode_prompt_sdxl(
             self.pipe,
             prompt=resolved_scene_inversion_prompt,
-            negative_prompt=self.config.negative_prompt,
+            negative_prompt=resolved_negative_prompt,
             image_size=scene_image.size,
             device=self.device,
             do_cfg=inversion_do_cfg,
@@ -155,7 +195,7 @@ class TeleportraitsPipeline:
             reference_prompt_embeds_inv = encode_prompt_sdxl(
                 self.pipe,
                 prompt=reference_prompt,
-                negative_prompt=self.config.negative_prompt,
+                negative_prompt=resolved_negative_prompt,
                 image_size=reference_image.size,
                 device=self.device,
                 do_cfg=inversion_do_cfg,
@@ -163,7 +203,7 @@ class TeleportraitsPipeline:
         initial_prompt_embeds = encode_prompt_sdxl(
             self.pipe,
             prompt=resolved_initial_prompt,
-            negative_prompt=self.config.negative_prompt,
+            negative_prompt=resolved_negative_prompt,
             image_size=scene_image.size,
             device=self.device,
             do_cfg=True,
@@ -171,7 +211,7 @@ class TeleportraitsPipeline:
         edit_prompt_embeds = encode_prompt_sdxl(
             self.pipe,
             prompt=resolved_edit_prompt,
-            negative_prompt=self.config.negative_prompt,
+            negative_prompt=resolved_negative_prompt,
             image_size=scene_image.size,
             device=self.device,
             do_cfg=True,
@@ -293,8 +333,8 @@ class TeleportraitsPipeline:
             _log_stage(self.config, "6/8 Foreground mask extraction (resumed)")
             foreground_mask = np.load(fg_mask_cache).astype(np.float32)
         else:
-            _log_stage(self.config, "6/8 Foreground mask extraction from initial pass")
-            foreground_mask = self.diff_mask_extractor.extract(initial_pass_image, scene_reconstruction_image)
+            _log_stage(self.config, "6/8 Foreground mask extraction from initial pass (SAM3)")
+            foreground_mask = self.foreground_mask_extractor.extract(initial_pass_image, scene_reconstruction_image)
             _mask_to_pil(foreground_mask).save(fg_mask_path)
             np.save(fg_mask_cache, foreground_mask.astype(np.float32))
 
@@ -509,3 +549,8 @@ def _ensure_finite(tensor: torch.Tensor, name: str) -> None:
         raise RuntimeError(
             f"Found non-finite values in {name}. Try --torch-dtype float32 and lower --inversion-fixed-point-iters."
         )
+
+
+def _save_json(path: Path, payload: Dict[str, Any]) -> None:
+    with path.open("w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)

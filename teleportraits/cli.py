@@ -6,6 +6,12 @@ import json
 from teleportraits.config import TeleportraitConfig
 from teleportraits.pipeline import TeleportraitsPipeline
 
+DEFAULT_NEGATIVE_PROMPT = (
+    "low quality, worst quality, blurry, bad anatomy, bad hands, extra fingers, "
+    "extra limbs, missing fingers, malformed limbs, mutated, deformed, disfigured, "
+    "poorly drawn, jpeg artifacts, watermark, text, logo, signature, cropped, out of frame"
+)
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Teleportraits reproduction pipeline")
@@ -49,7 +55,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument("--edit-guidance-scale", type=float, default=7.5)
-    parser.add_argument("--negative-prompt", default="")
+    parser.add_argument("--negative-prompt", default=DEFAULT_NEGATIVE_PROMPT)
 
     parser.add_argument("--blend-start-step", type=int, default=10)
     parser.add_argument("--blend-end-step", type=int, default=20)
@@ -67,6 +73,30 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser.add_argument("--mask-threshold", type=float, default=0.08)
     parser.add_argument("--mask-min-area-ratio", type=float, default=0.001)
+    parser.add_argument(
+        "--foreground-mask-prompt",
+        type=str,
+        default="person",
+        help="Text prompt used by SAM3 to extract the foreground mask from affordance pass.",
+    )
+    parser.add_argument(
+        "--foreground-mask-confidence-threshold",
+        type=float,
+        default=0.5,
+        help="SAM3 confidence threshold for foreground mask extraction.",
+    )
+    parser.add_argument(
+        "--sam3-checkpoint-dir",
+        type=str,
+        default="/mnt/whuscs/ljz/sam3",
+        help="Local SAM3 checkpoint directory containing sam3.pt (and related files).",
+    )
+    parser.add_argument(
+        "--sam3-conda-env",
+        type=str,
+        default="sam3",
+        help="Conda environment name used for SAM3 foreground mask extraction.",
+    )
     parser.add_argument(
         "--use-transformers-reference-mask",
         action="store_true",
@@ -101,6 +131,10 @@ def main() -> None:
         affordance_only=args.affordance_only,
         mask_threshold=args.mask_threshold,
         mask_min_area_ratio=args.mask_min_area_ratio,
+        foreground_mask_prompt=args.foreground_mask_prompt,
+        foreground_mask_confidence_threshold=args.foreground_mask_confidence_threshold,
+        sam3_checkpoint_dir=args.sam3_checkpoint_dir,
+        sam3_conda_env=args.sam3_conda_env,
         use_transformers_reference_mask=args.use_transformers_reference_mask,
         verbose=not args.quiet,
         show_progress_bar=not args.no_progress_bar,

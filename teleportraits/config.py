@@ -15,7 +15,11 @@ class TeleportraitConfig:
     inversion_prompt: Optional[str] = None
 
     edit_guidance_scale: float = 7.5
-    negative_prompt: str = ""
+    negative_prompt: str = (
+        "low quality, worst quality, blurry, bad anatomy, bad hands, extra fingers, "
+        "extra limbs, missing fingers, malformed limbs, mutated, deformed, disfigured, "
+        "poorly drawn, jpeg artifacts, watermark, text, logo, signature, cropped, out of frame"
+    )
 
     blend_start_step: int = 10
     blend_end_step: int = 20
@@ -28,6 +32,10 @@ class TeleportraitConfig:
 
     mask_threshold: float = 0.08
     mask_min_area_ratio: float = 0.001
+    foreground_mask_prompt: str = "person"
+    foreground_mask_confidence_threshold: float = 0.5
+    sam3_checkpoint_dir: Optional[str] = None
+    sam3_conda_env: str = "sam3"
     use_transformers_reference_mask: bool = False
 
     verbose: bool = True
