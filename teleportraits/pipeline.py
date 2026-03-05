@@ -323,15 +323,18 @@ class TeleportraitsPipeline:
             _save_tensor_dict(scene_recon_traj_cache, scene_reconstruction_traj)
         _ensure_finite(scene_reconstruction_final, "scene_reconstruction_final")
 
+        initial_pass_image: Optional[Image.Image] = None
+        initial_final: Optional[torch.Tensor] = None
         if foreground_mask_override:
             _log_stage(self.config, "5/8 Initial human generation pass (skipped: user foreground mask provided)")
-            initial_pass_image = scene_reconstruction_image
-            initial_final = scene_reconstruction_final
-            if not initial_path.exists():
-                initial_pass_image.save(initial_path)
-            if not affordance_path.exists():
-                initial_pass_image.save(affordance_path)
             outputs["pipeline_mode"] = "user_foreground_mask"
+            outputs["initial_pass_skipped"] = "true"
+            outputs["affordance_pass_skipped"] = "true"
+            # Remove stale artifacts in case this run dir previously contained a full run.
+            if initial_path.exists():
+                initial_path.unlink()
+            if affordance_path.exists():
+                affordance_path.unlink()
         elif initial_path.exists() and initial_final_cache.exists():
             _log_stage(self.config, "5/8 Initial human generation pass (resumed)")
             initial_pass_image = load_image(str(initial_path))
@@ -353,9 +356,10 @@ class TeleportraitsPipeline:
             # Backward-compatibility alias for previous filename.
             initial_pass_image.save(affordance_path)
             _save_tensor(initial_final_cache, initial_final)
-        if not affordance_path.exists():
+        if initial_pass_image is not None and not affordance_path.exists():
             initial_pass_image.save(affordance_path)
-        _ensure_finite(initial_final, "initial_final")
+        if initial_final is not None:
+            _ensure_finite(initial_final, "initial_final")
 
         if self.config.affordance_only:
             _log_stage(
