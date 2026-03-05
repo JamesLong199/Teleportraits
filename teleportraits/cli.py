@@ -13,6 +13,19 @@ DEFAULT_NEGATIVE_PROMPT = (
 )
 
 
+def _parse_step_range(value: str, arg_name: str) -> tuple[int, int]:
+    text = value.strip()
+    if ":" not in text:
+        raise ValueError(f"{arg_name} must be in 'start:end' format, got: {value!r}")
+    start_str, end_str = text.split(":", 1)
+    try:
+        start = int(start_str.strip())
+        end = int(end_str.strip())
+    except ValueError as exc:
+        raise ValueError(f"{arg_name} must contain integer start/end, got: {value!r}") from exc
+    return start, end
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Teleportraits reproduction pipeline")
 
@@ -21,10 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--foreground-mask-image",
         default=None,
-        help=(
-            "Optional user-provided foreground mask for the scene (white=person region). "
-            "If provided, initial/affordance pass and automatic foreground mask extraction are skipped."
-        ),
+        help="Optional binary/gray mask for final-pass foreground region (white=subject, black=background).",
     )
     parser.add_argument(
         "--reference-mask-image",
@@ -67,12 +77,26 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser.add_argument("--blend-start-step", type=int, default=10)
     parser.add_argument("--blend-end-step", type=int, default=20)
+    parser.add_argument(
+        "--latent-blend-range",
+        type=str,
+        default=None,
+        help="Latent blending step range as 'start:end' (inclusive), e.g. 10:20.",
+    )
 
     parser.add_argument("--attention-enabled", action="store_true", dest="attention_enabled")
     parser.add_argument("--attention-disabled", action="store_false", dest="attention_enabled")
     parser.set_defaults(attention_enabled=True)
     parser.add_argument("--attention-inject-start-step", type=int, default=0)
     parser.add_argument("--attention-inject-end-step", type=int, default=49)
+    parser.add_argument(
+        "--mask-guided-attn-range",
+        type=str,
+        default=None,
+        help=(
+            "Mask-guided self-attention step range as 'start:end' (inclusive), e.g. 0:49."
+        ),
+    )
     parser.add_argument(
         "--affordance-only",
         action="store_true",
@@ -121,8 +145,19 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
-    if args.affordance_only and args.foreground_mask_image:
-        raise ValueError("--affordance-only cannot be combined with --foreground-mask-image.")
+    blend_start_step = args.blend_start_step
+    blend_end_step = args.blend_end_step
+    if args.latent_blend_range is not None:
+        blend_start_step, blend_end_step = _parse_step_range(
+            args.latent_blend_range, "--latent-blend-range"
+        )
+
+    attention_inject_start_step = args.attention_inject_start_step
+    attention_inject_end_step = args.attention_inject_end_step
+    if args.mask_guided_attn_range is not None:
+        attention_inject_start_step, attention_inject_end_step = _parse_step_range(
+            args.mask_guided_attn_range, "--mask-guided-attn-range"
+        )
 
     config = TeleportraitConfig(
         model_id=args.model_id,
@@ -133,11 +168,11 @@ def main() -> None:
         inversion_prompt=args.inversion_prompt,
         edit_guidance_scale=args.edit_guidance_scale,
         negative_prompt=args.negative_prompt,
-        blend_start_step=args.blend_start_step,
-        blend_end_step=args.blend_end_step,
+        blend_start_step=blend_start_step,
+        blend_end_step=blend_end_step,
         attention_enabled=args.attention_enabled,
-        attention_inject_start_step=args.attention_inject_start_step,
-        attention_inject_end_step=args.attention_inject_end_step,
+        attention_inject_start_step=attention_inject_start_step,
+        attention_inject_end_step=attention_inject_end_step,
         affordance_only=args.affordance_only,
         mask_threshold=args.mask_threshold,
         mask_min_area_ratio=args.mask_min_area_ratio,

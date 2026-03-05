@@ -91,19 +91,22 @@ class TeleportraitsPipeline:
         output_dir: str,
         person_placeholder: str = "a person",
     ) -> Dict[str, str]:
-        output_path = _resolve_run_output_dir(Path(output_dir), self.config)
+        base_output_dir = Path(output_dir)
+        foreground_mask_override = bool(foreground_mask_path and Path(foreground_mask_path).exists())
+        output_path = _resolve_run_output_dir(
+            base_output_dir,
+            self.config,
+            use_child_run=foreground_mask_override and base_output_dir.name.startswith("exp_"),
+        )
         output_path.mkdir(parents=True, exist_ok=True)
         cache_path = output_path / "_cache"
         cache_path.mkdir(parents=True, exist_ok=True)
         parent_cache_path: Optional[Path] = None
-        if output_path.parent.name.startswith("exp_"):
-            candidate_parent_cache = output_path.parent / "_cache"
+        if foreground_mask_override and base_output_dir.name.startswith("exp_"):
+            candidate_parent_cache = base_output_dir / "_cache"
             if candidate_parent_cache.exists():
                 parent_cache_path = candidate_parent_cache
-                _log_stage(
-                    self.config,
-                    f"Using parent cache fallback from: {candidate_parent_cache}",
-                )
+                _log_stage(self.config, f"Using parent cache fallback from: {candidate_parent_cache}")
 
         scene_input_path = output_path / "scene_input.png"
         reference_input_path = output_path / "reference_input.png"
@@ -115,13 +118,13 @@ class TeleportraitsPipeline:
         final_path = output_path / "final.png"
         run_config_path = output_path / "run_config.json"
 
-        scene_inv_cache = cache_path / "scene_inv_start_latents.pt"
-        reference_inv_cache = cache_path / "reference_inv_start_latents.pt"
-        scene_recon_final_cache = cache_path / "scene_reconstruction_final_latents.pt"
-        scene_recon_traj_cache = cache_path / "scene_reconstruction_trajectory.pt"
-        initial_final_cache = cache_path / "initial_pass_final_latents.pt"
-        fg_mask_cache = cache_path / "foreground_mask.npy"
-        ref_mask_cache = cache_path / "reference_mask.npy"
+        scene_inv_cache = _resolve_cache_file(cache_path, parent_cache_path, "scene_inv_start_latents.pt")
+        reference_inv_cache = _resolve_cache_file(cache_path, parent_cache_path, "reference_inv_start_latents.pt")
+        scene_recon_final_cache = _resolve_cache_file(cache_path, parent_cache_path, "scene_reconstruction_final_latents.pt")
+        scene_recon_traj_cache = _resolve_cache_file(cache_path, parent_cache_path, "scene_reconstruction_trajectory.pt")
+        initial_final_cache = _resolve_cache_file(cache_path, parent_cache_path, "initial_pass_final_latents.pt")
+        fg_mask_cache = _resolve_cache_file(cache_path, parent_cache_path, "foreground_mask.npy")
+        ref_mask_cache = _resolve_cache_file(cache_path, parent_cache_path, "reference_mask.npy")
 
         outputs: Dict[str, str] = {
             "run_dir": str(output_path),
@@ -138,10 +141,8 @@ class TeleportraitsPipeline:
         outputs["foreground_mask_prompt"] = self.config.foreground_mask_prompt
         outputs["sam3_checkpoint_dir"] = self.config.sam3_checkpoint_dir or ""
         outputs["sam3_conda_env"] = self.config.sam3_conda_env
-        use_user_foreground_mask = bool(foreground_mask_path and Path(foreground_mask_path).exists())
-        if foreground_mask_path and not use_user_foreground_mask:
-            raise FileNotFoundError(f"Foreground mask override not found: {foreground_mask_path}")
-        outputs["user_foreground_mask_path"] = foreground_mask_path or ""
+        if foreground_mask_override and foreground_mask_path is not None:
+            outputs["user_foreground_mask_path"] = foreground_mask_path
 
         _log_stage(self.config, "0/8 Loading inputs")
         scene_image = _resize_for_model(load_image(scene_image_path), target_size=self.config.image_size)
@@ -241,12 +242,9 @@ class TeleportraitsPipeline:
             reference_inversion_prompt=reference_prompt.strip(),
         )
 
-        scene_inv_cache_read = _cache_read_path(scene_inv_cache, parent_cache_path)
-        if scene_inv_cache_read.exists():
+        if scene_inv_cache.exists():
             _log_stage(self.config, "2/8 DDIM inversion: scene (resumed)")
-            scene_inv_start = _load_tensor(scene_inv_cache_read, device=self.device, dtype=self.dtype)
-            if scene_inv_cache_read != scene_inv_cache:
-                _save_tensor(scene_inv_cache, scene_inv_start)
+            scene_inv_start = _load_tensor(scene_inv_cache, device=self.device, dtype=self.dtype)
         else:
             _log_stage(self.config, "2/8 DDIM inversion: scene")
             scene_latents = image_to_latents(self.pipe, scene_image, device=self.device, dtype=self.dtype)
@@ -268,12 +266,9 @@ class TeleportraitsPipeline:
         if self.config.affordance_only:
             _log_stage(self.config, "3/8 DDIM inversion: reference (skipped: affordance-only mode)")
         else:
-            reference_inv_cache_read = _cache_read_path(reference_inv_cache, parent_cache_path)
-            if reference_inv_cache_read.exists():
+            if reference_inv_cache.exists():
                 _log_stage(self.config, "3/8 DDIM inversion: reference (resumed)")
-                reference_inv_start = _load_tensor(reference_inv_cache_read, device=self.device, dtype=self.dtype)
-                if reference_inv_cache_read != reference_inv_cache:
-                    _save_tensor(reference_inv_cache, reference_inv_start)
+                reference_inv_start = _load_tensor(reference_inv_cache, device=self.device, dtype=self.dtype)
             else:
                 _log_stage(self.config, "3/8 DDIM inversion: reference")
                 reference_latents = image_to_latents(self.pipe, reference_image, device=self.device, dtype=self.dtype)
@@ -317,10 +312,15 @@ class TeleportraitsPipeline:
             _save_tensor_dict(scene_recon_traj_cache, scene_reconstruction_traj)
         _ensure_finite(scene_reconstruction_final, "scene_reconstruction_final")
 
-        initial_pass_image: Optional[Image.Image] = None
-        initial_final: Optional[torch.Tensor] = None
-        if use_user_foreground_mask:
+        if foreground_mask_override:
             _log_stage(self.config, "5/8 Initial human generation pass (skipped: user foreground mask provided)")
+            initial_pass_image = scene_reconstruction_image
+            initial_final = scene_reconstruction_final
+            if not initial_path.exists():
+                initial_pass_image.save(initial_path)
+            if not affordance_path.exists():
+                initial_pass_image.save(affordance_path)
+            outputs["pipeline_mode"] = "user_foreground_mask"
         elif initial_path.exists() and initial_final_cache.exists():
             _log_stage(self.config, "5/8 Initial human generation pass (resumed)")
             initial_pass_image = load_image(str(initial_path))
@@ -342,10 +342,9 @@ class TeleportraitsPipeline:
             # Backward-compatibility alias for previous filename.
             initial_pass_image.save(affordance_path)
             _save_tensor(initial_final_cache, initial_final)
-        if initial_pass_image is not None and not affordance_path.exists():
+        if not affordance_path.exists():
             initial_pass_image.save(affordance_path)
-        if initial_final is not None:
-            _ensure_finite(initial_final, "initial_final")
+        _ensure_finite(initial_final, "initial_final")
 
         if self.config.affordance_only:
             _log_stage(
@@ -355,23 +354,20 @@ class TeleportraitsPipeline:
             outputs["pipeline_mode"] = "affordance_only"
             return outputs
 
-        if use_user_foreground_mask:
+        if foreground_mask_override and foreground_mask_path is not None:
             _log_stage(self.config, "6/8 Loading foreground mask override")
             foreground_mask = load_binary_mask(
-                path=str(foreground_mask_path),
+                path=foreground_mask_path,
                 target_size=scene_image.size,
                 invert=False,
             )
             _mask_to_pil(foreground_mask).save(fg_mask_path)
             np.save(fg_mask_cache, foreground_mask.astype(np.float32))
-            outputs["pipeline_mode"] = "user_foreground_mask"
         elif fg_mask_path.exists() and fg_mask_cache.exists():
             _log_stage(self.config, "6/8 Foreground mask extraction (resumed)")
             foreground_mask = np.load(fg_mask_cache).astype(np.float32)
         else:
             _log_stage(self.config, "6/8 Foreground mask extraction from initial pass (SAM3)")
-            if initial_pass_image is None:
-                raise RuntimeError("Initial pass image is required for automatic foreground mask extraction.")
             foreground_mask = self.foreground_mask_extractor.extract(initial_pass_image, scene_reconstruction_image)
             _mask_to_pil(foreground_mask).save(fg_mask_path)
             np.save(fg_mask_cache, foreground_mask.astype(np.float32))
@@ -500,17 +496,6 @@ def _load_tensor(path: Path, device: torch.device, dtype: torch.dtype) -> torch.
     return tensor.to(device=device, dtype=dtype)
 
 
-def _cache_read_path(primary_cache_file: Path, fallback_cache_dir: Optional[Path]) -> Path:
-    if primary_cache_file.exists():
-        return primary_cache_file
-    if fallback_cache_dir is None:
-        return primary_cache_file
-    fallback_file = fallback_cache_dir / primary_cache_file.name
-    if fallback_file.exists():
-        return fallback_file
-    return primary_cache_file
-
-
 def _save_tensor_dict(path: Path, tensor_dict: Dict[int, torch.Tensor]) -> None:
     serializable = {int(k): v.detach().cpu() for k, v in tensor_dict.items()}
     torch.save(serializable, path)
@@ -572,24 +557,25 @@ def _log_inversion_config(
     print(f"[Teleportraits]   reference_inversion_prompt={reference_inversion_prompt}", flush=True)
 
 
-def _resolve_run_output_dir(base_output_dir: Path, config: TeleportraitConfig) -> Path:
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-    # If user points to an existing experiment folder, create a child rerun folder.
+def _resolve_run_output_dir(base_output_dir: Path, config: TeleportraitConfig, use_child_run: bool = False) -> Path:
+    # If user already points to a concrete experiment folder, use it directly.
     if base_output_dir.name.startswith("exp_"):
-        base_output_dir.mkdir(parents=True, exist_ok=True)
-        rerun_dir = base_output_dir / f"rerun_{timestamp}"
-        if rerun_dir.exists():
+        if use_child_run:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            run_dir = base_output_dir / f"rerun_{timestamp}"
             suffix = 1
-            while (base_output_dir / f"rerun_{timestamp}_{suffix:02d}").exists():
+            while run_dir.exists():
+                run_dir = base_output_dir / f"rerun_{timestamp}_{suffix:02d}"
                 suffix += 1
-            rerun_dir = base_output_dir / f"rerun_{timestamp}_{suffix:02d}"
-        _log_stage(config, f"Resuming explicit run dir via child run: {rerun_dir.name}")
-        return rerun_dir
+            _log_stage(config, f"Resuming explicit run dir via child run: {run_dir.name}")
+            return run_dir
+        _log_stage(config, f"Resuming explicit run dir: {base_output_dir.name}")
+        return base_output_dir
 
     base_output_dir.mkdir(parents=True, exist_ok=True)
 
     # Root output dir always creates a fresh run folder.
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = base_output_dir / f"exp_{timestamp}"
     # Guard rare same-second collisions.
     if run_dir.exists():
@@ -611,3 +597,14 @@ def _ensure_finite(tensor: torch.Tensor, name: str) -> None:
 def _save_json(path: Path, payload: Dict[str, Any]) -> None:
     with path.open("w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)
+
+
+def _resolve_cache_file(cache_path: Path, parent_cache_path: Optional[Path], filename: str) -> Path:
+    local_file = cache_path / filename
+    if local_file.exists():
+        return local_file
+    if parent_cache_path is not None:
+        parent_file = parent_cache_path / filename
+        if parent_file.exists():
+            return parent_file
+    return local_file
