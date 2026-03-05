@@ -95,6 +95,15 @@ class TeleportraitsPipeline:
         output_path.mkdir(parents=True, exist_ok=True)
         cache_path = output_path / "_cache"
         cache_path.mkdir(parents=True, exist_ok=True)
+        parent_cache_path: Optional[Path] = None
+        if output_path.parent.name.startswith("exp_"):
+            candidate_parent_cache = output_path.parent / "_cache"
+            if candidate_parent_cache.exists():
+                parent_cache_path = candidate_parent_cache
+                _log_stage(
+                    self.config,
+                    f"Using parent cache fallback from: {candidate_parent_cache}",
+                )
 
         scene_input_path = output_path / "scene_input.png"
         reference_input_path = output_path / "reference_input.png"
@@ -232,9 +241,12 @@ class TeleportraitsPipeline:
             reference_inversion_prompt=reference_prompt.strip(),
         )
 
-        if scene_inv_cache.exists():
+        scene_inv_cache_read = _cache_read_path(scene_inv_cache, parent_cache_path)
+        if scene_inv_cache_read.exists():
             _log_stage(self.config, "2/8 DDIM inversion: scene (resumed)")
-            scene_inv_start = _load_tensor(scene_inv_cache, device=self.device, dtype=self.dtype)
+            scene_inv_start = _load_tensor(scene_inv_cache_read, device=self.device, dtype=self.dtype)
+            if scene_inv_cache_read != scene_inv_cache:
+                _save_tensor(scene_inv_cache, scene_inv_start)
         else:
             _log_stage(self.config, "2/8 DDIM inversion: scene")
             scene_latents = image_to_latents(self.pipe, scene_image, device=self.device, dtype=self.dtype)
@@ -256,9 +268,12 @@ class TeleportraitsPipeline:
         if self.config.affordance_only:
             _log_stage(self.config, "3/8 DDIM inversion: reference (skipped: affordance-only mode)")
         else:
-            if reference_inv_cache.exists():
+            reference_inv_cache_read = _cache_read_path(reference_inv_cache, parent_cache_path)
+            if reference_inv_cache_read.exists():
                 _log_stage(self.config, "3/8 DDIM inversion: reference (resumed)")
-                reference_inv_start = _load_tensor(reference_inv_cache, device=self.device, dtype=self.dtype)
+                reference_inv_start = _load_tensor(reference_inv_cache_read, device=self.device, dtype=self.dtype)
+                if reference_inv_cache_read != reference_inv_cache:
+                    _save_tensor(reference_inv_cache, reference_inv_start)
             else:
                 _log_stage(self.config, "3/8 DDIM inversion: reference")
                 reference_latents = image_to_latents(self.pipe, reference_image, device=self.device, dtype=self.dtype)
@@ -485,6 +500,17 @@ def _load_tensor(path: Path, device: torch.device, dtype: torch.dtype) -> torch.
     return tensor.to(device=device, dtype=dtype)
 
 
+def _cache_read_path(primary_cache_file: Path, fallback_cache_dir: Optional[Path]) -> Path:
+    if primary_cache_file.exists():
+        return primary_cache_file
+    if fallback_cache_dir is None:
+        return primary_cache_file
+    fallback_file = fallback_cache_dir / primary_cache_file.name
+    if fallback_file.exists():
+        return fallback_file
+    return primary_cache_file
+
+
 def _save_tensor_dict(path: Path, tensor_dict: Dict[int, torch.Tensor]) -> None:
     serializable = {int(k): v.detach().cpu() for k, v in tensor_dict.items()}
     torch.save(serializable, path)
@@ -547,15 +573,23 @@ def _log_inversion_config(
 
 
 def _resolve_run_output_dir(base_output_dir: Path, config: TeleportraitConfig) -> Path:
-    # If user already points to a concrete experiment folder, use it directly.
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    # If user points to an existing experiment folder, create a child rerun folder.
     if base_output_dir.name.startswith("exp_"):
-        _log_stage(config, f"Resuming explicit run dir: {base_output_dir.name}")
-        return base_output_dir
+        base_output_dir.mkdir(parents=True, exist_ok=True)
+        rerun_dir = base_output_dir / f"rerun_{timestamp}"
+        if rerun_dir.exists():
+            suffix = 1
+            while (base_output_dir / f"rerun_{timestamp}_{suffix:02d}").exists():
+                suffix += 1
+            rerun_dir = base_output_dir / f"rerun_{timestamp}_{suffix:02d}"
+        _log_stage(config, f"Resuming explicit run dir via child run: {rerun_dir.name}")
+        return rerun_dir
 
     base_output_dir.mkdir(parents=True, exist_ok=True)
 
     # Root output dir always creates a fresh run folder.
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = base_output_dir / f"exp_{timestamp}"
     # Guard rare same-second collisions.
     if run_dir.exists():
