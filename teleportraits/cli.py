@@ -73,6 +73,65 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument("--edit-guidance-scale", type=float, default=7.5)
+    parser.add_argument(
+        "--affordance-controlnet-depth",
+        action="store_true",
+        help="Enable ControlNet Depth conditioning in the affordance (initial human) pass.",
+    )
+    parser.add_argument(
+        "--affordance-controlnet-model-id",
+        type=str,
+        default="diffusers/controlnet-depth-sdxl-1.0",
+        help="ControlNet model id/path for affordance depth conditioning.",
+    )
+    parser.add_argument(
+        "--affordance-controlnet-dir",
+        type=str,
+        default="./pretrained/controlnet-depth-sdxl-1.0",
+        help=(
+            "Local directory for ControlNet Depth weights. If it does not exist, "
+            "--affordance-controlnet-model-id is used."
+        ),
+    )
+    parser.add_argument(
+        "--affordance-controlnet-scale",
+        type=float,
+        default=1.0,
+        help="Conditioning scale for affordance depth ControlNet.",
+    )
+    parser.add_argument(
+        "--moge-pretrained-model",
+        type=str,
+        default="Ruicheng/moge-2-vitl-normal",
+        help="MoGe pretrained model name/path.",
+    )
+    parser.add_argument(
+        "--moge-checkpoint-dir",
+        type=str,
+        default="./pretrained/moge",
+        help=(
+            "Local MoGe checkpoint directory or file. Accepted layouts include "
+            "<dir>/model.pt or <dir>/<version>/model.pt."
+        ),
+    )
+    parser.add_argument(
+        "--moge-model-version",
+        type=str,
+        default="v2",
+        choices=["v1", "v2"],
+        help="MoGe model version.",
+    )
+    parser.add_argument(
+        "--moge-conda-env",
+        type=str,
+        default="",
+        help="Optional conda env for running MoGe depth extraction. Empty uses current Python env.",
+    )
+    parser.add_argument(
+        "--moge-no-fp16",
+        action="store_true",
+        help="Disable fp16 in MoGe depth inference.",
+    )
     parser.add_argument("--negative-prompt", default=DEFAULT_NEGATIVE_PROMPT)
 
     parser.add_argument("--blend-start-step", type=int, default=10)
@@ -167,6 +226,15 @@ def main() -> None:
         inversion_fixed_point_iters=args.inversion_fixed_point_iters,
         inversion_prompt=args.inversion_prompt,
         edit_guidance_scale=args.edit_guidance_scale,
+        affordance_use_controlnet_depth=args.affordance_controlnet_depth,
+        affordance_controlnet_model_id=args.affordance_controlnet_model_id,
+        affordance_controlnet_dir=args.affordance_controlnet_dir,
+        affordance_controlnet_scale=args.affordance_controlnet_scale,
+        moge_pretrained_model=args.moge_pretrained_model,
+        moge_checkpoint_dir=args.moge_checkpoint_dir,
+        moge_model_version=args.moge_model_version,
+        moge_conda_env=args.moge_conda_env,
+        moge_use_fp16=not args.moge_no_fp16,
         negative_prompt=args.negative_prompt,
         blend_start_step=blend_start_step,
         blend_end_step=blend_end_step,

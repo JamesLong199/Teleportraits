@@ -15,6 +15,16 @@ class TeleportraitConfig:
     inversion_prompt: Optional[str] = None
 
     edit_guidance_scale: float = 7.5
+    affordance_use_controlnet_depth: bool = False
+    affordance_controlnet_model_id: str = "diffusers/controlnet-depth-sdxl-1.0"
+    affordance_controlnet_dir: str = "./pretrained/controlnet-depth-sdxl-1.0"
+    affordance_controlnet_scale: float = 1.0
+    moge_pretrained_model: str = "Ruicheng/moge-2-vitl-normal"
+    moge_checkpoint_dir: str = "./pretrained/moge"
+    moge_model_version: str = "v2"
+    moge_conda_env: str = ""
+    moge_use_fp16: bool = True
+
     negative_prompt: str = (
         "low quality, worst quality, blurry, bad anatomy, bad hands, extra fingers, "
         "extra limbs, missing fingers, malformed limbs, mutated, deformed, disfigured, "

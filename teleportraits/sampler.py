@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Callable, Optional
 
 import torch
-from diffusers import StableDiffusionXLPipeline
+from diffusers import ControlNetModel, StableDiffusionXLPipeline
 from tqdm.auto import tqdm
 
 from teleportraits.types import PromptEmbeds, TrajectoryResult
@@ -19,6 +19,9 @@ def run_denoise_trajectory(
     num_inference_steps: int,
     attn_controller: Optional[object] = None,
     post_step_hook: Optional[PostStepHook] = None,
+    controlnet: Optional[ControlNetModel] = None,
+    control_image: Optional[torch.Tensor] = None,
+    controlnet_conditioning_scale: float = 1.0,
     stage_name: str = "Denoising",
     show_progress_bar: bool = True,
 ) -> TrajectoryResult:
@@ -59,11 +62,33 @@ def run_denoise_trajectory(
             "time_ids": prompt_embeds.add_time_ids,
         }
 
+        down_block_res_samples = None
+        mid_block_res_sample = None
+        if controlnet is not None:
+            if control_image is None:
+                raise ValueError("control_image must be provided when controlnet is enabled")
+
+            controlnet_cond = control_image
+            if prompt_embeds.do_cfg and controlnet_cond.shape[0] == 1:
+                controlnet_cond = torch.cat([controlnet_cond, controlnet_cond], dim=0)
+
+            down_block_res_samples, mid_block_res_sample = controlnet(
+                model_input,
+                t,
+                encoder_hidden_states=prompt_embeds.prompt_embeds,
+                controlnet_cond=controlnet_cond,
+                conditioning_scale=controlnet_conditioning_scale,
+                added_cond_kwargs=added_cond_kwargs,
+                return_dict=False,
+            )
+
         noise_pred = pipe.unet(
             model_input,
             t,
             encoder_hidden_states=prompt_embeds.prompt_embeds,
             added_cond_kwargs=added_cond_kwargs,
+            down_block_additional_residuals=down_block_res_samples,
+            mid_block_additional_residual=mid_block_res_sample,
             return_dict=False,
         )[0]
 

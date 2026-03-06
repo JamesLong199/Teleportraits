@@ -9,7 +9,7 @@ from typing import Any, Dict, Optional
 
 import numpy as np
 import torch
-from diffusers import DDIMScheduler, StableDiffusionXLPipeline
+from diffusers import ControlNetModel, DDIMScheduler, StableDiffusionXLPipeline
 from PIL import Image
 
 from teleportraits.attention import (
@@ -20,6 +20,7 @@ from teleportraits.attention import (
 )
 from teleportraits.blending import BlendWindow, LatentBlender, build_latent_masks
 from teleportraits.config import TeleportraitConfig
+from teleportraits.depth import MogeDepthMapExtractor, depth_to_control_image
 from teleportraits.inversion import ddim_fixed_point_invert
 from teleportraits.masks import load_binary_mask
 from teleportraits.prompts import compose_edit_prompt
@@ -61,6 +62,39 @@ class TeleportraitsPipeline:
             steps_offset=0,
         )
         self.pipe = self.pipe.to(self.device)
+
+        self.affordance_controlnet: Optional[ControlNetModel] = None
+        if config.affordance_use_controlnet_depth:
+            controlnet_source = config.affordance_controlnet_model_id
+            controlnet_dir = Path(config.affordance_controlnet_dir).expanduser()
+            if config.affordance_controlnet_dir.strip() and controlnet_dir.exists():
+                controlnet_source = str(controlnet_dir.resolve())
+            elif config.affordance_controlnet_dir.strip() and config.verbose:
+                _log_stage(
+                    config,
+                    f"ControlNet dir not found ({config.affordance_controlnet_dir}); "
+                    f"falling back to model id: {config.affordance_controlnet_model_id}",
+                )
+
+            controlnet_kwargs = {"use_safetensors": True}
+            controlnet_signature = inspect.signature(ControlNetModel.from_pretrained)
+            if "dtype" in controlnet_signature.parameters:
+                controlnet_kwargs["dtype"] = self.dtype
+            else:
+                controlnet_kwargs["torch_dtype"] = self.dtype
+            self.affordance_controlnet = ControlNetModel.from_pretrained(
+                controlnet_source,
+                **controlnet_kwargs,
+            ).to(self.device)
+
+        self.depth_extractor = MogeDepthMapExtractor(
+            pretrained_model_name_or_path=config.moge_pretrained_model,
+            checkpoint_dir=config.moge_checkpoint_dir,
+            model_version=config.moge_model_version,
+            device=config.device,
+            use_fp16=config.moge_use_fp16,
+            conda_env=config.moge_conda_env,
+        )
 
         self.foreground_mask_extractor = Sam3ForegroundMaskExtractor(
             prompt=config.foreground_mask_prompt,
@@ -112,6 +146,7 @@ class TeleportraitsPipeline:
         reference_input_path = output_path / "reference_input.png"
         initial_path = output_path / "initial_pass.png"
         affordance_path = output_path / "affordance_pass.png"
+        scene_depth_path = output_path / "scene_depth.png"
         scene_recon_path = output_path / "scene_reconstruction.png"
         fg_mask_path = output_path / "foreground_mask.png"
         ref_mask_path = output_path / "reference_mask.png"
@@ -132,6 +167,7 @@ class TeleportraitsPipeline:
             "reference_input": str(reference_input_path),
             "initial_pass": str(initial_path),
             "affordance_pass": str(affordance_path),
+            "scene_depth": str(scene_depth_path),
             "scene_reconstruction": str(scene_recon_path),
             "foreground_mask": str(fg_mask_path),
             "reference_mask": str(ref_mask_path),
@@ -325,6 +361,7 @@ class TeleportraitsPipeline:
 
         initial_pass_image: Optional[Image.Image] = None
         initial_final: Optional[torch.Tensor] = None
+        affordance_control_image_tensor: Optional[torch.Tensor] = None
         if foreground_mask_override:
             _log_stage(self.config, "5/8 Initial human generation pass (skipped: user foreground mask provided)")
             outputs["pipeline_mode"] = "user_foreground_mask"
@@ -340,6 +377,25 @@ class TeleportraitsPipeline:
             initial_pass_image = load_image(str(initial_path))
             initial_final = _load_tensor(initial_final_cache, device=self.device, dtype=self.dtype)
         else:
+            if self.config.affordance_use_controlnet_depth:
+                if self.affordance_controlnet is None:
+                    raise RuntimeError("ControlNet Depth is enabled but model was not initialized.")
+                if scene_depth_path.exists():
+                    _log_stage(self.config, "5/8 Loading scene depth map for affordance control (resumed)")
+                    scene_depth_image = load_image(str(scene_depth_path)).convert("RGB")
+                else:
+                    _log_stage(self.config, "5/8 Generating scene depth map with MoGe for affordance control")
+                    scene_depth_norm = self.depth_extractor.extract(scene_image)
+                    scene_depth_image = depth_to_control_image(scene_depth_norm)
+                    scene_depth_image.save(scene_depth_path)
+                if scene_depth_image.size != scene_image.size:
+                    scene_depth_image = scene_depth_image.resize(scene_image.size, Image.Resampling.BICUBIC)
+                affordance_control_image_tensor = _control_image_to_tensor(
+                    scene_depth_image,
+                    device=self.device,
+                    dtype=self.dtype,
+                )
+
             _log_stage(self.config, "5/8 Initial human generation pass")
             initial_pass = run_denoise_trajectory(
                 pipe=self.pipe,
@@ -347,6 +403,9 @@ class TeleportraitsPipeline:
                 prompt_embeds=initial_prompt_embeds,
                 guidance_scale=self.config.edit_guidance_scale,
                 num_inference_steps=self.config.num_inference_steps,
+                controlnet=self.affordance_controlnet if self.config.affordance_use_controlnet_depth else None,
+                control_image=affordance_control_image_tensor,
+                controlnet_conditioning_scale=self.config.affordance_controlnet_scale,
                 stage_name="Initial human pass",
                 show_progress_bar=self.config.show_progress_bar,
             )
@@ -498,6 +557,12 @@ def _resize_for_model(image: Image.Image, target_size: int) -> Image.Image:
 def _mask_to_pil(mask: np.ndarray) -> Image.Image:
     arr = np.clip(mask * 255.0, 0, 255).astype(np.uint8)
     return Image.fromarray(arr, mode="L")
+
+
+def _control_image_to_tensor(image: Image.Image, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+    arr = np.asarray(image.convert("RGB"), dtype=np.float32) / 255.0
+    tensor = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0)
+    return tensor.to(device=device, dtype=dtype)
 
 
 def _save_tensor(path: Path, tensor: torch.Tensor) -> None:
