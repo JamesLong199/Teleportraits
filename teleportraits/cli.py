@@ -109,6 +109,20 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--affordance-controlnet-mask-image",
+        type=str,
+        default=None,
+        help=(
+            "Optional mask image for ControlNet residual suppression in affordance pass "
+            "(white=suppress depth condition in that region)."
+        ),
+    )
+    parser.add_argument(
+        "--affordance-controlnet-mask-invert",
+        action="store_true",
+        help="Invert affordance controlnet mask interpretation.",
+    )
+    parser.add_argument(
         "--moge-pretrained-model",
         type=str,
         default="Ruicheng/moge-2-vitl-normal",
@@ -244,6 +258,8 @@ def main() -> None:
         affordance_controlnet_scale=args.affordance_controlnet_scale,
         affordance_controlnet_start_step=affordance_controlnet_start_step,
         affordance_controlnet_end_step=affordance_controlnet_end_step,
+        affordance_controlnet_mask_image=args.affordance_controlnet_mask_image,
+        affordance_controlnet_mask_invert=args.affordance_controlnet_mask_invert,
         moge_pretrained_model=args.moge_pretrained_model,
         moge_checkpoint_dir=args.moge_checkpoint_dir,
         moge_model_version=args.moge_model_version,

@@ -147,6 +147,7 @@ class TeleportraitsPipeline:
         initial_path = output_path / "initial_pass.png"
         affordance_path = output_path / "affordance_pass.png"
         scene_depth_path = output_path / "scene_depth.png"
+        affordance_controlnet_mask_path = output_path / "affordance_controlnet_mask.png"
         scene_recon_path = output_path / "scene_reconstruction.png"
         fg_mask_path = output_path / "foreground_mask.png"
         ref_mask_path = output_path / "reference_mask.png"
@@ -168,6 +169,7 @@ class TeleportraitsPipeline:
             "initial_pass": str(initial_path),
             "affordance_pass": str(affordance_path),
             "scene_depth": str(scene_depth_path),
+            "affordance_controlnet_mask": str(affordance_controlnet_mask_path),
             "scene_reconstruction": str(scene_recon_path),
             "foreground_mask": str(fg_mask_path),
             "reference_mask": str(ref_mask_path),
@@ -362,6 +364,7 @@ class TeleportraitsPipeline:
         initial_pass_image: Optional[Image.Image] = None
         initial_final: Optional[torch.Tensor] = None
         affordance_control_image_tensor: Optional[torch.Tensor] = None
+        affordance_controlnet_residual_suppress_mask: Optional[torch.Tensor] = None
         if foreground_mask_override:
             _log_stage(self.config, "5/8 Initial human generation pass (skipped: user foreground mask provided)")
             outputs["pipeline_mode"] = "user_foreground_mask"
@@ -395,6 +398,25 @@ class TeleportraitsPipeline:
                     device=self.device,
                     dtype=self.dtype,
                 )
+                if self.config.affordance_controlnet_mask_image is not None:
+                    mask_path = Path(self.config.affordance_controlnet_mask_image)
+                    if not mask_path.exists():
+                        raise FileNotFoundError(
+                            "affordance_controlnet_mask_image does not exist: "
+                            f"{self.config.affordance_controlnet_mask_image}"
+                        )
+                    _log_stage(self.config, "5/8 Loading affordance ControlNet residual suppression mask")
+                    suppress_mask_np = load_binary_mask(
+                        path=str(mask_path),
+                        target_size=scene_image.size,
+                        invert=self.config.affordance_controlnet_mask_invert,
+                    )
+                    _mask_to_pil(suppress_mask_np).save(affordance_controlnet_mask_path)
+                    affordance_controlnet_residual_suppress_mask = _mask_to_tensor(
+                        suppress_mask_np,
+                        device=self.device,
+                        dtype=self.dtype,
+                    )
 
             _log_stage(self.config, "5/8 Initial human generation pass")
             initial_pass = run_denoise_trajectory(
@@ -411,6 +433,7 @@ class TeleportraitsPipeline:
                     self.config.affordance_controlnet_end_step,
                     self.config.num_inference_steps - 1,
                 ),
+                controlnet_residual_suppress_mask=affordance_controlnet_residual_suppress_mask,
                 stage_name="Initial human pass",
                 show_progress_bar=self.config.show_progress_bar,
             )
@@ -567,6 +590,11 @@ def _mask_to_pil(mask: np.ndarray) -> Image.Image:
 def _control_image_to_tensor(image: Image.Image, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
     arr = np.asarray(image.convert("RGB"), dtype=np.float32) / 255.0
     tensor = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0)
+    return tensor.to(device=device, dtype=dtype)
+
+
+def _mask_to_tensor(mask: np.ndarray, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+    tensor = torch.from_numpy(mask.astype(np.float32)).unsqueeze(0).unsqueeze(0)
     return tensor.to(device=device, dtype=dtype)
 
 

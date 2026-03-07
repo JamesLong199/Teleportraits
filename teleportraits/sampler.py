@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Callable, Optional
 
 import torch
+import torch.nn.functional as F
 from diffusers import ControlNetModel, StableDiffusionXLPipeline
 from tqdm.auto import tqdm
 
@@ -24,6 +25,7 @@ def run_denoise_trajectory(
     controlnet_conditioning_scale: float = 1.0,
     controlnet_inject_start_step: int = 0,
     controlnet_inject_end_step: int = 999,
+    controlnet_residual_suppress_mask: Optional[torch.Tensor] = None,
     stage_name: str = "Denoising",
     show_progress_bar: bool = True,
 ) -> TrajectoryResult:
@@ -87,6 +89,17 @@ def run_denoise_trajectory(
                 added_cond_kwargs=added_cond_kwargs,
                 return_dict=False,
             )
+            if controlnet_residual_suppress_mask is not None:
+                suppress_mask = _prepare_suppress_mask(
+                    controlnet_residual_suppress_mask,
+                    batch_size=down_block_res_samples[0].shape[0],
+                    device=down_block_res_samples[0].device,
+                    dtype=down_block_res_samples[0].dtype,
+                )
+                down_block_res_samples = tuple(
+                    _apply_suppress_mask_to_feature(x, suppress_mask) for x in down_block_res_samples
+                )
+                mid_block_res_sample = _apply_suppress_mask_to_feature(mid_block_res_sample, suppress_mask)
 
         noise_pred = pipe.unet(
             model_input,
@@ -114,3 +127,29 @@ def run_denoise_trajectory(
         latents_by_timestep=latents_by_timestep,
         timesteps=[int(t.item()) for t in timesteps],
     )
+
+
+def _prepare_suppress_mask(
+    suppress_mask: torch.Tensor,
+    batch_size: int,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> torch.Tensor:
+    if suppress_mask.ndim != 4 or suppress_mask.shape[1] != 1:
+        raise ValueError(
+            "controlnet_residual_suppress_mask must have shape [B,1,H,W] or [1,1,H,W]."
+        )
+    out = suppress_mask.to(device=device, dtype=dtype)
+    if out.shape[0] == 1 and batch_size > 1:
+        out = out.repeat(batch_size, 1, 1, 1)
+    elif out.shape[0] != batch_size:
+        raise ValueError(
+            f"controlnet_residual_suppress_mask batch {out.shape[0]} does not match model batch {batch_size}."
+        )
+    return out
+
+
+def _apply_suppress_mask_to_feature(feature: torch.Tensor, suppress_mask: torch.Tensor) -> torch.Tensor:
+    resized = F.interpolate(suppress_mask, size=feature.shape[-2:], mode="bilinear", align_corners=False)
+    keep = 1.0 - resized
+    return feature * keep
