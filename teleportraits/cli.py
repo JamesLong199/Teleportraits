@@ -108,6 +108,47 @@ def build_parser() -> argparse.ArgumentParser:
         help="Conditioning scale for affordance depth ControlNet.",
     )
     parser.add_argument(
+        "--affordance-controlnet-openpose",
+        action="store_true",
+        help="Enable second affordance pass with OpenPose ControlNet.",
+    )
+    parser.add_argument(
+        "--affordance-controlnet-openpose-model-id",
+        type=str,
+        default="thibaud/controlnet-openpose-sdxl-1.0",
+        help="OpenPose ControlNet model id/path for the second affordance pass.",
+    )
+    parser.add_argument(
+        "--affordance-controlnet-openpose-dir",
+        type=str,
+        default="./pretrained/controlnet-openpose-sdxl-1.0",
+        help=(
+            "Local directory for OpenPose ControlNet weights. If it does not exist, "
+            "--affordance-controlnet-openpose-model-id is used."
+        ),
+    )
+    parser.add_argument(
+        "--affordance-controlnet-openpose-scale",
+        type=float,
+        default=1.0,
+        help="Conditioning scale for OpenPose ControlNet in second affordance/final passes.",
+    )
+    parser.add_argument(
+        "--openpose-detector-model-id",
+        type=str,
+        default="lllyasviel/Annotators",
+        help="OpenPose detector model id/path used to extract a pose map from the initial affordance image.",
+    )
+    parser.add_argument(
+        "--openpose-detector-dir",
+        type=str,
+        default="",
+        help=(
+            "Optional local directory for OpenPose detector weights. If missing/empty, "
+            "--openpose-detector-model-id is used."
+        ),
+    )
+    parser.add_argument(
         "--affordance-controlnet-range",
         type=str,
         default="0:999",
@@ -279,6 +320,12 @@ def main() -> None:
         affordance_controlnet_scale=args.affordance_controlnet_scale,
         affordance_controlnet_start_step=affordance_controlnet_start_step,
         affordance_controlnet_end_step=affordance_controlnet_end_step,
+        affordance_use_controlnet_openpose=args.affordance_controlnet_openpose,
+        affordance_openpose_controlnet_model_id=args.affordance_controlnet_openpose_model_id,
+        affordance_openpose_controlnet_dir=args.affordance_controlnet_openpose_dir,
+        affordance_openpose_controlnet_scale=args.affordance_controlnet_openpose_scale,
+        openpose_detector_model_id=args.openpose_detector_model_id,
+        openpose_detector_dir=args.openpose_detector_dir,
         affordance_controlnet_mask_image=args.affordance_controlnet_mask_image,
         affordance_controlnet_mask_invert=args.affordance_controlnet_mask_invert,
         affordance_controlnet_mask_start_step=affordance_controlnet_mask_start_step,

@@ -23,6 +23,7 @@ from teleportraits.config import TeleportraitConfig
 from teleportraits.depth import MogeDepthMapExtractor, depth_to_control_image
 from teleportraits.inversion import ddim_fixed_point_invert
 from teleportraits.masks import load_binary_mask
+from teleportraits.pose import OpenposeMapExtractor
 from teleportraits.prompts import compose_edit_prompt
 from teleportraits.sampler import run_denoise_trajectory
 from teleportraits.sdxl_utils import (
@@ -64,28 +65,19 @@ class TeleportraitsPipeline:
         self.pipe = self.pipe.to(self.device)
 
         self.affordance_controlnet: Optional[ControlNetModel] = None
+        self.affordance_openpose_controlnet: Optional[ControlNetModel] = None
         if config.affordance_use_controlnet_depth:
-            controlnet_source = config.affordance_controlnet_model_id
-            controlnet_dir = Path(config.affordance_controlnet_dir).expanduser()
-            if config.affordance_controlnet_dir.strip() and controlnet_dir.exists():
-                controlnet_source = str(controlnet_dir.resolve())
-            elif config.affordance_controlnet_dir.strip() and config.verbose:
-                _log_stage(
-                    config,
-                    f"ControlNet dir not found ({config.affordance_controlnet_dir}); "
-                    f"falling back to model id: {config.affordance_controlnet_model_id}",
-                )
-
-            controlnet_kwargs = {"use_safetensors": True}
-            controlnet_signature = inspect.signature(ControlNetModel.from_pretrained)
-            if "dtype" in controlnet_signature.parameters:
-                controlnet_kwargs["dtype"] = self.dtype
-            else:
-                controlnet_kwargs["torch_dtype"] = self.dtype
-            self.affordance_controlnet = ControlNetModel.from_pretrained(
-                controlnet_source,
-                **controlnet_kwargs,
-            ).to(self.device)
+            self.affordance_controlnet = self._load_controlnet(
+                model_id=config.affordance_controlnet_model_id,
+                model_dir=config.affordance_controlnet_dir,
+                model_label="depth",
+            )
+        if config.affordance_use_controlnet_openpose:
+            self.affordance_openpose_controlnet = self._load_controlnet(
+                model_id=config.affordance_openpose_controlnet_model_id,
+                model_dir=config.affordance_openpose_controlnet_dir,
+                model_label="openpose",
+            )
 
         self.depth_extractor = MogeDepthMapExtractor(
             pretrained_model_name_or_path=config.moge_pretrained_model,
@@ -95,6 +87,13 @@ class TeleportraitsPipeline:
             use_fp16=config.moge_use_fp16,
             conda_env=config.moge_conda_env,
         )
+        self.openpose_extractor: Optional[OpenposeMapExtractor] = None
+        if config.affordance_use_controlnet_openpose:
+            self.openpose_extractor = OpenposeMapExtractor(
+                pretrained_model_name_or_path=config.openpose_detector_model_id,
+                model_dir=config.openpose_detector_dir,
+                device=config.device,
+            )
 
         self.foreground_mask_extractor = Sam3ForegroundMaskExtractor(
             prompt=config.foreground_mask_prompt,
@@ -110,6 +109,25 @@ class TeleportraitsPipeline:
             self.reference_mask_extractor = TransformersPersonMaskExtractor()
         else:
             self.reference_mask_extractor = None
+
+    def _load_controlnet(self, model_id: str, model_dir: str, model_label: str) -> ControlNetModel:
+        controlnet_source = model_id
+        controlnet_dir = Path(model_dir).expanduser()
+        if model_dir.strip() and controlnet_dir.exists():
+            controlnet_source = str(controlnet_dir.resolve())
+        elif model_dir.strip() and self.config.verbose:
+            _log_stage(
+                self.config,
+                f"ControlNet {model_label} dir not found ({model_dir}); falling back to model id: {model_id}",
+            )
+
+        controlnet_kwargs = {"use_safetensors": True}
+        controlnet_signature = inspect.signature(ControlNetModel.from_pretrained)
+        if "dtype" in controlnet_signature.parameters:
+            controlnet_kwargs["dtype"] = self.dtype
+        else:
+            controlnet_kwargs["torch_dtype"] = self.dtype
+        return ControlNetModel.from_pretrained(controlnet_source, **controlnet_kwargs).to(self.device)
 
     @torch.no_grad()
     def run(
@@ -146,6 +164,7 @@ class TeleportraitsPipeline:
         reference_input_path = output_path / "reference_input.png"
         initial_path = output_path / "initial_pass.png"
         affordance_path = output_path / "affordance_pass.png"
+        affordance_pose_path = output_path / "affordance_pose.png"
         scene_depth_path = output_path / "scene_depth.png"
         affordance_controlnet_mask_path = output_path / "affordance_controlnet_mask.png"
         scene_recon_path = output_path / "scene_reconstruction.png"
@@ -160,6 +179,7 @@ class TeleportraitsPipeline:
         scene_recon_final_cache = _resolve_cache_file(cache_path, parent_cache_path, "scene_reconstruction_final_latents.pt")
         scene_recon_traj_cache = _resolve_cache_file(cache_path, parent_cache_path, "scene_reconstruction_trajectory.pt")
         initial_final_cache = _resolve_cache_file(cache_path, parent_cache_path, "initial_pass_final_latents.pt")
+        affordance_final_cache = _resolve_cache_file(cache_path, parent_cache_path, "affordance_pass_final_latents.pt")
         fg_mask_cache = _resolve_cache_file(cache_path, parent_cache_path, "foreground_mask.npy")
         ref_mask_cache = _resolve_cache_file(cache_path, parent_cache_path, "reference_mask.npy")
 
@@ -169,6 +189,7 @@ class TeleportraitsPipeline:
             "reference_input": str(reference_input_path),
             "initial_pass": str(initial_path),
             "affordance_pass": str(affordance_path),
+            "affordance_pose": str(affordance_pose_path),
             "scene_depth": str(scene_depth_path),
             "affordance_controlnet_mask": str(affordance_controlnet_mask_path),
             "scene_reconstruction": str(scene_recon_path),
@@ -390,13 +411,23 @@ class TeleportraitsPipeline:
             self.config.affordance_controlnet_mask_end_step,
             self.config.num_inference_steps - 1,
         )
-        use_affordance_controlnet = self.config.affordance_use_controlnet_depth
+        use_depth_controlnet = self.config.affordance_use_controlnet_depth
+        use_openpose_controlnet = self.config.affordance_use_controlnet_openpose
 
         initial_pass_image: Optional[Image.Image] = None
         initial_final: Optional[torch.Tensor] = None
-        affordance_control_image_tensor: Optional[torch.Tensor] = None
+        affordance_pass_image: Optional[Image.Image] = None
+        affordance_final: Optional[torch.Tensor] = None
+        depth_control_image_tensor: Optional[torch.Tensor] = None
+        openpose_control_image_tensor: Optional[torch.Tensor] = None
         affordance_controlnet_residual_suppress_mask: Optional[torch.Tensor] = None
-        if use_affordance_controlnet:
+        if foreground_mask_override and use_openpose_controlnet:
+            raise ValueError(
+                "--affordance-controlnet-openpose requires generating the affordance pass; "
+                "it cannot be combined with --foreground-mask-image override mode."
+            )
+
+        if use_depth_controlnet:
             if self.affordance_controlnet is None:
                 raise RuntimeError("ControlNet Depth is enabled but model was not initialized.")
             if scene_depth_path.exists():
@@ -409,7 +440,7 @@ class TeleportraitsPipeline:
                 scene_depth_image.save(scene_depth_path)
             if scene_depth_image.size != scene_image.size:
                 scene_depth_image = scene_depth_image.resize(scene_image.size, Image.Resampling.BICUBIC)
-            affordance_control_image_tensor = _control_image_to_tensor(
+            depth_control_image_tensor = _control_image_to_tensor(
                 scene_depth_image,
                 device=self.device,
                 dtype=self.dtype,
@@ -454,6 +485,8 @@ class TeleportraitsPipeline:
                 initial_path.unlink()
             if affordance_path.exists():
                 affordance_path.unlink()
+            if affordance_pose_path.exists():
+                affordance_pose_path.unlink()
         elif initial_path.exists() and initial_final_cache.exists():
             _log_stage(self.config, "5/8 Initial human generation pass (resumed)")
             initial_pass_image = load_image(str(initial_path))
@@ -466,8 +499,8 @@ class TeleportraitsPipeline:
                 prompt_embeds=initial_prompt_embeds,
                 guidance_scale=self.config.edit_guidance_scale,
                 num_inference_steps=self.config.num_inference_steps,
-                controlnet=self.affordance_controlnet if use_affordance_controlnet else None,
-                control_image=affordance_control_image_tensor,
+                controlnet=self.affordance_controlnet if use_depth_controlnet else None,
+                control_image=depth_control_image_tensor,
                 controlnet_conditioning_scale=self.config.affordance_controlnet_scale,
                 controlnet_inject_start_step=controlnet_start_step,
                 controlnet_inject_end_step=controlnet_end_step,
@@ -480,13 +513,74 @@ class TeleportraitsPipeline:
             initial_final = initial_pass.final_latents
             initial_pass_image = latents_to_image(self.pipe, initial_final)
             initial_pass_image.save(initial_path)
-            # Backward-compatibility alias for previous filename.
-            initial_pass_image.save(affordance_path)
             _save_tensor(initial_final_cache, initial_final)
-        if initial_pass_image is not None and not affordance_path.exists():
-            initial_pass_image.save(affordance_path)
         if initial_final is not None:
             _ensure_finite(initial_final, "initial_final")
+        affordance_pass_image = initial_pass_image
+        affordance_final = initial_final
+
+        if use_openpose_controlnet:
+            if self.affordance_openpose_controlnet is None or self.openpose_extractor is None:
+                raise RuntimeError("OpenPose ControlNet is enabled but model/extractor was not initialized.")
+            if affordance_path.exists() and affordance_pose_path.exists() and affordance_final_cache.exists():
+                _log_stage(self.config, "5/8 Second affordance generation pass (OpenPose, resumed)")
+                affordance_pass_image = load_image(str(affordance_path))
+                affordance_final = _load_tensor(affordance_final_cache, device=self.device, dtype=self.dtype)
+                pose_image = load_image(str(affordance_pose_path)).convert("RGB")
+                if pose_image.size != scene_image.size:
+                    pose_image = pose_image.resize(scene_image.size, Image.Resampling.BICUBIC)
+                    pose_image.save(affordance_pose_path)
+                openpose_control_image_tensor = _control_image_to_tensor(
+                    pose_image,
+                    device=self.device,
+                    dtype=self.dtype,
+                )
+            else:
+                if initial_pass_image is None:
+                    raise RuntimeError("Initial affordance image is required for OpenPose extraction.")
+                _log_stage(self.config, "5/8 Extracting pose from initial affordance image")
+                pose_image = self.openpose_extractor.extract(initial_pass_image, target_size=scene_image.size)
+                pose_image.save(affordance_pose_path)
+                openpose_control_image_tensor = _control_image_to_tensor(
+                    pose_image,
+                    device=self.device,
+                    dtype=self.dtype,
+                )
+                second_controlnet, second_control_image, second_control_scale = _compose_controlnet_inputs(
+                    depth_controlnet=self.affordance_controlnet if use_depth_controlnet else None,
+                    depth_control_image=depth_control_image_tensor,
+                    depth_scale=self.config.affordance_controlnet_scale,
+                    openpose_controlnet=self.affordance_openpose_controlnet,
+                    openpose_control_image=openpose_control_image_tensor,
+                    openpose_scale=self.config.affordance_openpose_controlnet_scale,
+                )
+                _log_stage(self.config, "5/8 Second affordance generation pass (OpenPose)")
+                second_affordance = run_denoise_trajectory(
+                    pipe=self.pipe,
+                    start_latents=scene_inv_start,
+                    prompt_embeds=initial_prompt_embeds,
+                    guidance_scale=self.config.edit_guidance_scale,
+                    num_inference_steps=self.config.num_inference_steps,
+                    controlnet=second_controlnet,
+                    control_image=second_control_image,
+                    controlnet_conditioning_scale=second_control_scale,
+                    controlnet_inject_start_step=controlnet_start_step,
+                    controlnet_inject_end_step=controlnet_end_step,
+                    controlnet_residual_suppress_mask=affordance_controlnet_residual_suppress_mask,
+                    controlnet_mask_inject_start_step=controlnet_mask_start_step,
+                    controlnet_mask_inject_end_step=controlnet_mask_end_step,
+                    stage_name="OpenPose affordance pass",
+                    show_progress_bar=self.config.show_progress_bar,
+                )
+                affordance_final = second_affordance.final_latents
+                _ensure_finite(affordance_final, "affordance_final")
+                affordance_pass_image = latents_to_image(self.pipe, affordance_final)
+                affordance_pass_image.save(affordance_path)
+                _save_tensor(affordance_final_cache, affordance_final)
+        elif affordance_pass_image is not None:
+            affordance_pass_image.save(affordance_path)
+        if affordance_final is not None:
+            _ensure_finite(affordance_final, "affordance_final")
 
         if self.config.affordance_only:
             _log_stage(
@@ -510,7 +604,9 @@ class TeleportraitsPipeline:
             foreground_mask = np.load(fg_mask_cache).astype(np.float32)
         else:
             _log_stage(self.config, "6/8 Foreground mask extraction from initial pass (SAM3)")
-            foreground_mask = self.foreground_mask_extractor.extract(initial_pass_image, scene_reconstruction_image)
+            if affordance_pass_image is None:
+                raise RuntimeError("Affordance image is required for foreground mask extraction.")
+            foreground_mask = self.foreground_mask_extractor.extract(affordance_pass_image, scene_reconstruction_image)
             _mask_to_pil(foreground_mask).save(fg_mask_path)
             np.save(fg_mask_cache, foreground_mask.astype(np.float32))
 
@@ -561,6 +657,14 @@ class TeleportraitsPipeline:
             )
         )
         controller.set_reference_mask(reference_mask_tensor)
+        final_controlnet, final_control_image, final_control_scale = _compose_controlnet_inputs(
+            depth_controlnet=self.affordance_controlnet if use_depth_controlnet else None,
+            depth_control_image=depth_control_image_tensor,
+            depth_scale=self.config.affordance_controlnet_scale,
+            openpose_controlnet=self.affordance_openpose_controlnet if use_openpose_controlnet else None,
+            openpose_control_image=openpose_control_image_tensor,
+            openpose_scale=self.config.affordance_openpose_controlnet_scale,
+        )
 
         original_processors = None
         if self.config.attention_enabled:
@@ -597,9 +701,9 @@ class TeleportraitsPipeline:
                 num_inference_steps=self.config.num_inference_steps,
                 attn_controller=controller if self.config.attention_enabled else None,
                 post_step_hook=blender,
-                controlnet=self.affordance_controlnet if use_affordance_controlnet else None,
-                control_image=affordance_control_image_tensor,
-                controlnet_conditioning_scale=self.config.affordance_controlnet_scale,
+                controlnet=final_controlnet,
+                control_image=final_control_image,
+                controlnet_conditioning_scale=final_control_scale,
                 controlnet_inject_start_step=controlnet_start_step,
                 controlnet_inject_end_step=controlnet_end_step,
                 controlnet_residual_suppress_mask=affordance_controlnet_residual_suppress_mask,
@@ -644,6 +748,39 @@ def _control_image_to_tensor(image: Image.Image, device: torch.device, dtype: to
 def _mask_to_tensor(mask: np.ndarray, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
     tensor = torch.from_numpy(mask.astype(np.float32)).unsqueeze(0).unsqueeze(0)
     return tensor.to(device=device, dtype=dtype)
+
+
+def _compose_controlnet_inputs(
+    depth_controlnet: Optional[ControlNetModel],
+    depth_control_image: Optional[torch.Tensor],
+    depth_scale: float,
+    openpose_controlnet: Optional[ControlNetModel],
+    openpose_control_image: Optional[torch.Tensor],
+    openpose_scale: float,
+) -> tuple[Optional[Any], Optional[Any], Any]:
+    controlnets = []
+    control_images = []
+    control_scales = []
+
+    if depth_controlnet is not None:
+        if depth_control_image is None:
+            raise ValueError("Depth ControlNet is enabled but depth control image is missing.")
+        controlnets.append(depth_controlnet)
+        control_images.append(depth_control_image)
+        control_scales.append(float(depth_scale))
+
+    if openpose_controlnet is not None:
+        if openpose_control_image is None:
+            raise ValueError("OpenPose ControlNet is enabled but openpose control image is missing.")
+        controlnets.append(openpose_controlnet)
+        control_images.append(openpose_control_image)
+        control_scales.append(float(openpose_scale))
+
+    if not controlnets:
+        return None, None, 1.0
+    if len(controlnets) == 1:
+        return controlnets[0], control_images[0], control_scales[0]
+    return tuple(controlnets), tuple(control_images), tuple(control_scales)
 
 
 def _save_tensor(path: Path, tensor: torch.Tensor) -> None:

@@ -22,6 +22,12 @@ class TeleportraitConfig:
     affordance_controlnet_scale: float = 1.0
     affordance_controlnet_start_step: int = 0
     affordance_controlnet_end_step: int = 999
+    affordance_use_controlnet_openpose: bool = False
+    affordance_openpose_controlnet_model_id: str = "thibaud/controlnet-openpose-sdxl-1.0"
+    affordance_openpose_controlnet_dir: str = "./pretrained/controlnet-openpose-sdxl-1.0"
+    affordance_openpose_controlnet_scale: float = 1.0
+    openpose_detector_model_id: str = "lllyasviel/Annotators"
+    openpose_detector_dir: str = ""
     affordance_controlnet_mask_image: Optional[str] = None
     affordance_controlnet_mask_invert: bool = False
     affordance_controlnet_mask_start_step: int = 0
