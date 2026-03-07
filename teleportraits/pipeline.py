@@ -406,6 +406,11 @@ class TeleportraitsPipeline:
                 controlnet=self.affordance_controlnet if self.config.affordance_use_controlnet_depth else None,
                 control_image=affordance_control_image_tensor,
                 controlnet_conditioning_scale=self.config.affordance_controlnet_scale,
+                controlnet_inject_start_step=self.config.affordance_controlnet_start_step,
+                controlnet_inject_end_step=min(
+                    self.config.affordance_controlnet_end_step,
+                    self.config.num_inference_steps - 1,
+                ),
                 stage_name="Initial human pass",
                 show_progress_bar=self.config.show_progress_bar,
             )

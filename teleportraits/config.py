@@ -19,6 +19,8 @@ class TeleportraitConfig:
     affordance_controlnet_model_id: str = "diffusers/controlnet-depth-sdxl-1.0"
     affordance_controlnet_dir: str = "./pretrained/controlnet-depth-sdxl-1.0"
     affordance_controlnet_scale: float = 1.0
+    affordance_controlnet_start_step: int = 0
+    affordance_controlnet_end_step: int = 999
     moge_pretrained_model: str = "Ruicheng/moge-2-vitl-normal"
     moge_checkpoint_dir: str = "./pretrained/moge"
     moge_model_version: str = "v2"

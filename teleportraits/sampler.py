@@ -22,6 +22,8 @@ def run_denoise_trajectory(
     controlnet: Optional[ControlNetModel] = None,
     control_image: Optional[torch.Tensor] = None,
     controlnet_conditioning_scale: float = 1.0,
+    controlnet_inject_start_step: int = 0,
+    controlnet_inject_end_step: int = 999,
     stage_name: str = "Denoising",
     show_progress_bar: bool = True,
 ) -> TrajectoryResult:
@@ -64,7 +66,11 @@ def run_denoise_trajectory(
 
         down_block_res_samples = None
         mid_block_res_sample = None
-        if controlnet is not None:
+        use_controlnet_this_step = (
+            controlnet is not None
+            and controlnet_inject_start_step <= i <= controlnet_inject_end_step
+        )
+        if use_controlnet_this_step:
             if control_image is None:
                 raise ValueError("control_image must be provided when controlnet is enabled")
 

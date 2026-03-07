@@ -100,6 +100,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Conditioning scale for affordance depth ControlNet.",
     )
     parser.add_argument(
+        "--affordance-controlnet-range",
+        type=str,
+        default="0:999",
+        help=(
+            "Affordance ControlNet injection step range as 'start:end' (inclusive), "
+            "e.g. 0:49."
+        ),
+    )
+    parser.add_argument(
         "--moge-pretrained-model",
         type=str,
         default="Ruicheng/moge-2-vitl-normal",
@@ -217,6 +226,9 @@ def main() -> None:
         attention_inject_start_step, attention_inject_end_step = _parse_step_range(
             args.mask_guided_attn_range, "--mask-guided-attn-range"
         )
+    affordance_controlnet_start_step, affordance_controlnet_end_step = _parse_step_range(
+        args.affordance_controlnet_range, "--affordance-controlnet-range"
+    )
 
     config = TeleportraitConfig(
         model_id=args.model_id,
@@ -230,6 +242,8 @@ def main() -> None:
         affordance_controlnet_model_id=args.affordance_controlnet_model_id,
         affordance_controlnet_dir=args.affordance_controlnet_dir,
         affordance_controlnet_scale=args.affordance_controlnet_scale,
+        affordance_controlnet_start_step=affordance_controlnet_start_step,
+        affordance_controlnet_end_step=affordance_controlnet_end_step,
         moge_pretrained_model=args.moge_pretrained_model,
         moge_checkpoint_dir=args.moge_checkpoint_dir,
         moge_model_version=args.moge_model_version,
