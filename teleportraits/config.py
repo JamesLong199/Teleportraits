@@ -23,6 +23,8 @@ class TeleportraitConfig:
     affordance_controlnet_end_step: int = 999
     affordance_controlnet_mask_image: Optional[str] = None
     affordance_controlnet_mask_invert: bool = False
+    affordance_controlnet_mask_start_step: int = 0
+    affordance_controlnet_mask_end_step: int = 999
     moge_pretrained_model: str = "Ruicheng/moge-2-vitl-normal"
     moge_checkpoint_dir: str = "./pretrained/moge"
     moge_model_version: str = "v2"

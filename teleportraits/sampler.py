@@ -26,6 +26,8 @@ def run_denoise_trajectory(
     controlnet_inject_start_step: int = 0,
     controlnet_inject_end_step: int = 999,
     controlnet_residual_suppress_mask: Optional[torch.Tensor] = None,
+    controlnet_mask_inject_start_step: int = 0,
+    controlnet_mask_inject_end_step: int = 999,
     stage_name: str = "Denoising",
     show_progress_bar: bool = True,
 ) -> TrajectoryResult:
@@ -89,7 +91,11 @@ def run_denoise_trajectory(
                 added_cond_kwargs=added_cond_kwargs,
                 return_dict=False,
             )
-            if controlnet_residual_suppress_mask is not None:
+            use_mask_this_step = (
+                controlnet_residual_suppress_mask is not None
+                and controlnet_mask_inject_start_step <= i <= controlnet_mask_inject_end_step
+            )
+            if use_mask_this_step:
                 suppress_mask = _prepare_suppress_mask(
                     controlnet_residual_suppress_mask,
                     batch_size=down_block_res_samples[0].shape[0],

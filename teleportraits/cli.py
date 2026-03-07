@@ -123,6 +123,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Invert affordance controlnet mask interpretation.",
     )
     parser.add_argument(
+        "--affordance-controlnet-mask-range",
+        type=str,
+        default="0:999",
+        help=(
+            "Affordance ControlNet residual-mask application range as 'start:end' (inclusive). "
+            "Must stay within --affordance-controlnet-range."
+        ),
+    )
+    parser.add_argument(
         "--moge-pretrained-model",
         type=str,
         default="Ruicheng/moge-2-vitl-normal",
@@ -243,6 +252,9 @@ def main() -> None:
     affordance_controlnet_start_step, affordance_controlnet_end_step = _parse_step_range(
         args.affordance_controlnet_range, "--affordance-controlnet-range"
     )
+    affordance_controlnet_mask_start_step, affordance_controlnet_mask_end_step = _parse_step_range(
+        args.affordance_controlnet_mask_range, "--affordance-controlnet-mask-range"
+    )
 
     config = TeleportraitConfig(
         model_id=args.model_id,
@@ -260,6 +272,8 @@ def main() -> None:
         affordance_controlnet_end_step=affordance_controlnet_end_step,
         affordance_controlnet_mask_image=args.affordance_controlnet_mask_image,
         affordance_controlnet_mask_invert=args.affordance_controlnet_mask_invert,
+        affordance_controlnet_mask_start_step=affordance_controlnet_mask_start_step,
+        affordance_controlnet_mask_end_step=affordance_controlnet_mask_end_step,
         moge_pretrained_model=args.moge_pretrained_model,
         moge_checkpoint_dir=args.moge_checkpoint_dir,
         moge_model_version=args.moge_model_version,

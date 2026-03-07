@@ -380,6 +380,16 @@ class TeleportraitsPipeline:
             initial_pass_image = load_image(str(initial_path))
             initial_final = _load_tensor(initial_final_cache, device=self.device, dtype=self.dtype)
         else:
+            controlnet_start_step = self.config.affordance_controlnet_start_step
+            controlnet_end_step = min(
+                self.config.affordance_controlnet_end_step,
+                self.config.num_inference_steps - 1,
+            )
+            controlnet_mask_start_step = self.config.affordance_controlnet_mask_start_step
+            controlnet_mask_end_step = min(
+                self.config.affordance_controlnet_mask_end_step,
+                self.config.num_inference_steps - 1,
+            )
             if self.config.affordance_use_controlnet_depth:
                 if self.affordance_controlnet is None:
                     raise RuntimeError("ControlNet Depth is enabled but model was not initialized.")
@@ -417,6 +427,14 @@ class TeleportraitsPipeline:
                         device=self.device,
                         dtype=self.dtype,
                     )
+                    if not (
+                        controlnet_start_step <= controlnet_mask_start_step <= controlnet_mask_end_step <= controlnet_end_step
+                    ):
+                        raise ValueError(
+                            "affordance_controlnet_mask_range must stay within affordance_controlnet_range. "
+                            f"Got mask range {controlnet_mask_start_step}:{controlnet_mask_end_step} and "
+                            f"controlnet range {controlnet_start_step}:{controlnet_end_step}."
+                        )
 
             _log_stage(self.config, "5/8 Initial human generation pass")
             initial_pass = run_denoise_trajectory(
@@ -428,12 +446,11 @@ class TeleportraitsPipeline:
                 controlnet=self.affordance_controlnet if self.config.affordance_use_controlnet_depth else None,
                 control_image=affordance_control_image_tensor,
                 controlnet_conditioning_scale=self.config.affordance_controlnet_scale,
-                controlnet_inject_start_step=self.config.affordance_controlnet_start_step,
-                controlnet_inject_end_step=min(
-                    self.config.affordance_controlnet_end_step,
-                    self.config.num_inference_steps - 1,
-                ),
+                controlnet_inject_start_step=controlnet_start_step,
+                controlnet_inject_end_step=controlnet_end_step,
                 controlnet_residual_suppress_mask=affordance_controlnet_residual_suppress_mask,
+                controlnet_mask_inject_start_step=controlnet_mask_start_step,
+                controlnet_mask_inject_end_step=controlnet_mask_end_step,
                 stage_name="Initial human pass",
                 show_progress_bar=self.config.show_progress_bar,
             )
