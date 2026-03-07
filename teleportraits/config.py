@@ -13,6 +13,7 @@ class TeleportraitConfig:
     inversion_guidance_scale: float = 1.0
     inversion_fixed_point_iters: int = 2
     inversion_prompt: Optional[str] = None
+    random_start_latent: bool = False
 
     edit_guidance_scale: float = 7.5
     affordance_use_controlnet_depth: bool = False

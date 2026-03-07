@@ -155,6 +155,7 @@ class TeleportraitsPipeline:
         run_config_path = output_path / "run_config.json"
 
         scene_inv_cache = _resolve_cache_file(cache_path, parent_cache_path, "scene_inv_start_latents.pt")
+        scene_random_cache = _resolve_cache_file(cache_path, parent_cache_path, "scene_random_start_latents.pt")
         reference_inv_cache = _resolve_cache_file(cache_path, parent_cache_path, "reference_inv_start_latents.pt")
         scene_recon_final_cache = _resolve_cache_file(cache_path, parent_cache_path, "scene_reconstruction_final_latents.pt")
         scene_recon_traj_cache = _resolve_cache_file(cache_path, parent_cache_path, "scene_reconstruction_trajectory.pt")
@@ -291,24 +292,42 @@ class TeleportraitsPipeline:
             reference_inversion_prompt=reference_prompt.strip(),
         )
 
-        if scene_inv_cache.exists():
-            _log_stage(self.config, "2/8 DDIM inversion: scene (resumed)")
-            scene_inv_start = _load_tensor(scene_inv_cache, device=self.device, dtype=self.dtype)
+        if self.config.random_start_latent:
+            if scene_random_cache.exists():
+                _log_stage(self.config, "2/8 Scene inversion: skipped (random latent, resumed)")
+                scene_inv_start = _load_tensor(scene_random_cache, device=self.device, dtype=self.dtype)
+            else:
+                _log_stage(self.config, "2/8 Scene inversion: skipped (random latent start)")
+                latent_h = scene_image.size[1] // self.pipe.vae_scale_factor
+                latent_w = scene_image.size[0] // self.pipe.vae_scale_factor
+                latent_channels = int(getattr(self.pipe.unet.config, "in_channels", 4))
+                generator = torch.Generator(device=self.device).manual_seed(int(self.config.seed))
+                scene_inv_start = torch.randn(
+                    (1, latent_channels, latent_h, latent_w),
+                    generator=generator,
+                    device=self.device,
+                    dtype=self.dtype,
+                )
+                _save_tensor(scene_random_cache, scene_inv_start)
         else:
-            _log_stage(self.config, "2/8 DDIM inversion: scene")
-            scene_latents = image_to_latents(self.pipe, scene_image, device=self.device, dtype=self.dtype)
-            scene_inv = ddim_fixed_point_invert(
-                pipe=self.pipe,
-                clean_latents=scene_latents,
-                prompt_embeds=scene_prompt_embeds_inv,
-                guidance_scale=self.config.inversion_guidance_scale,
-                num_inference_steps=self.config.num_inference_steps,
-                fixed_point_iters=self.config.inversion_fixed_point_iters,
-                stage_name="Invert scene",
-                show_progress_bar=self.config.show_progress_bar,
-            )
-            scene_inv_start = scene_inv.start_latents
-            _save_tensor(scene_inv_cache, scene_inv_start)
+            if scene_inv_cache.exists():
+                _log_stage(self.config, "2/8 DDIM inversion: scene (resumed)")
+                scene_inv_start = _load_tensor(scene_inv_cache, device=self.device, dtype=self.dtype)
+            else:
+                _log_stage(self.config, "2/8 DDIM inversion: scene")
+                scene_latents = image_to_latents(self.pipe, scene_image, device=self.device, dtype=self.dtype)
+                scene_inv = ddim_fixed_point_invert(
+                    pipe=self.pipe,
+                    clean_latents=scene_latents,
+                    prompt_embeds=scene_prompt_embeds_inv,
+                    guidance_scale=self.config.inversion_guidance_scale,
+                    num_inference_steps=self.config.num_inference_steps,
+                    fixed_point_iters=self.config.inversion_fixed_point_iters,
+                    stage_name="Invert scene",
+                    show_progress_bar=self.config.show_progress_bar,
+                )
+                scene_inv_start = scene_inv.start_latents
+                _save_tensor(scene_inv_cache, scene_inv_start)
         _ensure_finite(scene_inv_start, "scene_inv_start")
 
         reference_inv_start: Optional[torch.Tensor] = None
@@ -361,10 +380,70 @@ class TeleportraitsPipeline:
             _save_tensor_dict(scene_recon_traj_cache, scene_reconstruction_traj)
         _ensure_finite(scene_reconstruction_final, "scene_reconstruction_final")
 
+        controlnet_start_step = self.config.affordance_controlnet_start_step
+        controlnet_end_step = min(
+            self.config.affordance_controlnet_end_step,
+            self.config.num_inference_steps - 1,
+        )
+        controlnet_mask_start_step = self.config.affordance_controlnet_mask_start_step
+        controlnet_mask_end_step = min(
+            self.config.affordance_controlnet_mask_end_step,
+            self.config.num_inference_steps - 1,
+        )
+        use_affordance_controlnet = self.config.affordance_use_controlnet_depth
+
         initial_pass_image: Optional[Image.Image] = None
         initial_final: Optional[torch.Tensor] = None
         affordance_control_image_tensor: Optional[torch.Tensor] = None
         affordance_controlnet_residual_suppress_mask: Optional[torch.Tensor] = None
+        if use_affordance_controlnet:
+            if self.affordance_controlnet is None:
+                raise RuntimeError("ControlNet Depth is enabled but model was not initialized.")
+            if scene_depth_path.exists():
+                _log_stage(self.config, "5/8 Loading scene depth map for affordance control (resumed)")
+                scene_depth_image = load_image(str(scene_depth_path)).convert("RGB")
+            else:
+                _log_stage(self.config, "5/8 Generating scene depth map with MoGe for affordance control")
+                scene_depth_norm = self.depth_extractor.extract(scene_image)
+                scene_depth_image = depth_to_control_image(scene_depth_norm)
+                scene_depth_image.save(scene_depth_path)
+            if scene_depth_image.size != scene_image.size:
+                scene_depth_image = scene_depth_image.resize(scene_image.size, Image.Resampling.BICUBIC)
+            affordance_control_image_tensor = _control_image_to_tensor(
+                scene_depth_image,
+                device=self.device,
+                dtype=self.dtype,
+            )
+
+            if self.config.affordance_controlnet_mask_image is not None:
+                mask_path = Path(self.config.affordance_controlnet_mask_image)
+                if not mask_path.exists():
+                    raise FileNotFoundError(
+                        "affordance_controlnet_mask_image does not exist: "
+                        f"{self.config.affordance_controlnet_mask_image}"
+                    )
+                _log_stage(self.config, "5/8 Loading affordance ControlNet residual suppression mask")
+                suppress_mask_np = load_binary_mask(
+                    path=str(mask_path),
+                    target_size=scene_image.size,
+                    invert=self.config.affordance_controlnet_mask_invert,
+                )
+                _mask_to_pil(suppress_mask_np).save(affordance_controlnet_mask_path)
+                affordance_controlnet_residual_suppress_mask = _mask_to_tensor(
+                    suppress_mask_np,
+                    device=self.device,
+                    dtype=self.dtype,
+                )
+
+            if affordance_controlnet_residual_suppress_mask is not None and not (
+                controlnet_start_step <= controlnet_mask_start_step <= controlnet_mask_end_step <= controlnet_end_step
+            ):
+                raise ValueError(
+                    "affordance_controlnet_mask_range must stay within affordance_controlnet_range. "
+                    f"Got mask range {controlnet_mask_start_step}:{controlnet_mask_end_step} and "
+                    f"controlnet range {controlnet_start_step}:{controlnet_end_step}."
+                )
+
         if foreground_mask_override:
             _log_stage(self.config, "5/8 Initial human generation pass (skipped: user foreground mask provided)")
             outputs["pipeline_mode"] = "user_foreground_mask"
@@ -380,62 +459,6 @@ class TeleportraitsPipeline:
             initial_pass_image = load_image(str(initial_path))
             initial_final = _load_tensor(initial_final_cache, device=self.device, dtype=self.dtype)
         else:
-            controlnet_start_step = self.config.affordance_controlnet_start_step
-            controlnet_end_step = min(
-                self.config.affordance_controlnet_end_step,
-                self.config.num_inference_steps - 1,
-            )
-            controlnet_mask_start_step = self.config.affordance_controlnet_mask_start_step
-            controlnet_mask_end_step = min(
-                self.config.affordance_controlnet_mask_end_step,
-                self.config.num_inference_steps - 1,
-            )
-            if self.config.affordance_use_controlnet_depth:
-                if self.affordance_controlnet is None:
-                    raise RuntimeError("ControlNet Depth is enabled but model was not initialized.")
-                if scene_depth_path.exists():
-                    _log_stage(self.config, "5/8 Loading scene depth map for affordance control (resumed)")
-                    scene_depth_image = load_image(str(scene_depth_path)).convert("RGB")
-                else:
-                    _log_stage(self.config, "5/8 Generating scene depth map with MoGe for affordance control")
-                    scene_depth_norm = self.depth_extractor.extract(scene_image)
-                    scene_depth_image = depth_to_control_image(scene_depth_norm)
-                    scene_depth_image.save(scene_depth_path)
-                if scene_depth_image.size != scene_image.size:
-                    scene_depth_image = scene_depth_image.resize(scene_image.size, Image.Resampling.BICUBIC)
-                affordance_control_image_tensor = _control_image_to_tensor(
-                    scene_depth_image,
-                    device=self.device,
-                    dtype=self.dtype,
-                )
-                if self.config.affordance_controlnet_mask_image is not None:
-                    mask_path = Path(self.config.affordance_controlnet_mask_image)
-                    if not mask_path.exists():
-                        raise FileNotFoundError(
-                            "affordance_controlnet_mask_image does not exist: "
-                            f"{self.config.affordance_controlnet_mask_image}"
-                        )
-                    _log_stage(self.config, "5/8 Loading affordance ControlNet residual suppression mask")
-                    suppress_mask_np = load_binary_mask(
-                        path=str(mask_path),
-                        target_size=scene_image.size,
-                        invert=self.config.affordance_controlnet_mask_invert,
-                    )
-                    _mask_to_pil(suppress_mask_np).save(affordance_controlnet_mask_path)
-                    affordance_controlnet_residual_suppress_mask = _mask_to_tensor(
-                        suppress_mask_np,
-                        device=self.device,
-                        dtype=self.dtype,
-                    )
-                    if not (
-                        controlnet_start_step <= controlnet_mask_start_step <= controlnet_mask_end_step <= controlnet_end_step
-                    ):
-                        raise ValueError(
-                            "affordance_controlnet_mask_range must stay within affordance_controlnet_range. "
-                            f"Got mask range {controlnet_mask_start_step}:{controlnet_mask_end_step} and "
-                            f"controlnet range {controlnet_start_step}:{controlnet_end_step}."
-                        )
-
             _log_stage(self.config, "5/8 Initial human generation pass")
             initial_pass = run_denoise_trajectory(
                 pipe=self.pipe,
@@ -443,7 +466,7 @@ class TeleportraitsPipeline:
                 prompt_embeds=initial_prompt_embeds,
                 guidance_scale=self.config.edit_guidance_scale,
                 num_inference_steps=self.config.num_inference_steps,
-                controlnet=self.affordance_controlnet if self.config.affordance_use_controlnet_depth else None,
+                controlnet=self.affordance_controlnet if use_affordance_controlnet else None,
                 control_image=affordance_control_image_tensor,
                 controlnet_conditioning_scale=self.config.affordance_controlnet_scale,
                 controlnet_inject_start_step=controlnet_start_step,
@@ -574,6 +597,14 @@ class TeleportraitsPipeline:
                 num_inference_steps=self.config.num_inference_steps,
                 attn_controller=controller if self.config.attention_enabled else None,
                 post_step_hook=blender,
+                controlnet=self.affordance_controlnet if use_affordance_controlnet else None,
+                control_image=affordance_control_image_tensor,
+                controlnet_conditioning_scale=self.config.affordance_controlnet_scale,
+                controlnet_inject_start_step=controlnet_start_step,
+                controlnet_inject_end_step=controlnet_end_step,
+                controlnet_residual_suppress_mask=affordance_controlnet_residual_suppress_mask,
+                controlnet_mask_inject_start_step=controlnet_mask_start_step,
+                controlnet_mask_inject_end_step=controlnet_mask_end_step,
                 stage_name="Final blended pass",
                 show_progress_bar=self.config.show_progress_bar,
             )

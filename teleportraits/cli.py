@@ -71,6 +71,14 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional prompt override for scene inversion only. If omitted, uses --scene-prompt.",
     )
+    parser.add_argument(
+        "--random-start-latent",
+        action="store_true",
+        help=(
+            "Start affordance/final denoising from a shared random latent instead of scene inversion; "
+            "scene inversion step is skipped."
+        ),
+    )
 
     parser.add_argument("--edit-guidance-scale", type=float, default=7.5)
     parser.add_argument(
@@ -263,6 +271,7 @@ def main() -> None:
         inversion_guidance_scale=args.inversion_guidance_scale,
         inversion_fixed_point_iters=args.inversion_fixed_point_iters,
         inversion_prompt=args.inversion_prompt,
+        random_start_latent=args.random_start_latent,
         edit_guidance_scale=args.edit_guidance_scale,
         affordance_use_controlnet_depth=args.affordance_controlnet_depth,
         affordance_controlnet_model_id=args.affordance_controlnet_model_id,
