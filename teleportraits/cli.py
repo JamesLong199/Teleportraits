@@ -57,7 +57,13 @@ def _as_int(value: Any, name: str, default: int) -> int:
         raise ValueError(f"{name} must be an int, got: {value!r}") from exc
 
 
-def _as_str(value: Any, name: str, default: str | None = None, required: bool = False) -> str | None:
+def _as_str(
+    value: Any,
+    name: str,
+    default: str | None = None,
+    required: bool = False,
+    allow_empty: bool = False,
+) -> str | None:
     if value is None:
         if required:
             raise ValueError(f"{name} is required")
@@ -67,7 +73,7 @@ def _as_str(value: Any, name: str, default: str | None = None, required: bool = 
     text = value.strip()
     if required and not text:
         raise ValueError(f"{name} cannot be empty")
-    if text == "" and default is not None:
+    if text == "" and not allow_empty and default is not None:
         return default
     return text
 
@@ -241,6 +247,7 @@ def _build_from_json(payload: Dict[str, Any]) -> Tuple[TeleportraitConfig, Dict[
         affordance_cfg.get("negative_prompt"),
         "passes.affordance.negative_prompt",
         default=DEFAULT_NEGATIVE_PROMPT,
+        allow_empty=True,
     )
     affordance_guidance_scale = _as_float(
         affordance_cfg.get("guidance_scale"),
