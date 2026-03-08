@@ -223,6 +223,7 @@ class TeleportraitsPipeline:
         reference_input_path = output_path / "reference_input.png"
         initial_path = output_path / "initial_pass.png"
         affordance_path = output_path / "affordance_pass.png"
+        affordance_refine_path = output_path / "affordance_refine_pass.png"
         affordance_pose_path = output_path / "affordance_pose.png"
         scene_depth_path = output_path / "scene_depth.png"
         affordance_controlnet_mask_path = output_path / "affordance_controlnet_mask.png"
@@ -248,6 +249,7 @@ class TeleportraitsPipeline:
             "reference_input": str(reference_input_path),
             "initial_pass": str(initial_path),
             "affordance_pass": str(affordance_path),
+            "affordance_refine_pass": str(affordance_refine_path),
             "affordance_pose": str(affordance_pose_path),
             "scene_depth": str(scene_depth_path),
             "affordance_controlnet_mask": str(affordance_controlnet_mask_path),
@@ -616,6 +618,8 @@ class TeleportraitsPipeline:
                 initial_path.unlink()
             if affordance_path.exists():
                 affordance_path.unlink()
+            if affordance_refine_path.exists():
+                affordance_refine_path.unlink()
             if affordance_pose_path.exists():
                 affordance_pose_path.unlink()
         elif initial_path.exists() and initial_final_cache.exists():
@@ -657,6 +661,9 @@ class TeleportraitsPipeline:
             _ensure_finite(initial_final, "initial_final")
         affordance_pass_image = initial_pass_image
         affordance_final = initial_final
+        if initial_pass_image is not None:
+            # Keep initial affordance pass artifact stable for debugging, even if a refine pass runs later.
+            initial_pass_image.save(affordance_path)
 
         need_generated_pose_map = use_affordance_refine_pose_controlnet or use_final_pose_controlnet
         if need_generated_pose_map:
@@ -686,9 +693,9 @@ class TeleportraitsPipeline:
 
         run_affordance_refine = use_affordance_refine_depth_controlnet or use_affordance_refine_pose_controlnet
         if run_affordance_refine:
-            if affordance_path.exists() and affordance_final_cache.exists():
+            if affordance_refine_path.exists() and affordance_final_cache.exists():
                 _log_stage(self.config, "5/8 Second affordance generation pass (refine, resumed)")
-                affordance_pass_image = load_image(str(affordance_path))
+                affordance_pass_image = load_image(str(affordance_refine_path))
                 affordance_final = _load_tensor(affordance_final_cache, device=self.device, dtype=self.dtype)
             else:
                 second_controlnet, second_control_image, second_control_scale = _compose_controlnet_inputs(
@@ -720,10 +727,10 @@ class TeleportraitsPipeline:
                 affordance_final = second_affordance.final_latents
                 _ensure_finite(affordance_final, "affordance_final")
                 affordance_pass_image = latents_to_image(self.pipe, affordance_final)
-                affordance_pass_image.save(affordance_path)
+                affordance_pass_image.save(affordance_refine_path)
                 _save_tensor(affordance_final_cache, affordance_final)
-        elif affordance_pass_image is not None:
-            affordance_pass_image.save(affordance_path)
+        elif affordance_refine_path.exists():
+            affordance_refine_path.unlink()
         if affordance_final is not None:
             _ensure_finite(affordance_final, "affordance_final")
 

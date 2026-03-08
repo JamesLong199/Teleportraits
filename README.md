@@ -63,6 +63,7 @@ Key outputs:
 - `final.png`: final insertion result.
 - `initial_pass.png`: initial human generation pass used for mask extraction.
 - `affordance_pass.png`: affordance result used for downstream masking/final pass.
+- `affordance_refine_pass.png`: second affordance pass result when affordance refinement is enabled.
 - `affordance_pose.png`: OpenPose map extracted from `initial_pass.png` when openpose refinement is enabled.
 - `scene_reconstruction.png`: reconstructed scene from inversion trajectory.
 - `foreground_mask.png`: foreground mask used for latent blending.
