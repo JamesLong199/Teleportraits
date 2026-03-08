@@ -54,7 +54,12 @@ class TeleportraitsPipeline:
         else:
             load_kwargs["torch_dtype"] = self.dtype
 
-        self.pipe = StableDiffusionXLPipeline.from_pretrained(config.model_id, **load_kwargs)
+        self.pipe = self._load_diffusers_component(
+            StableDiffusionXLPipeline,
+            config.model_id,
+            load_kwargs,
+            "base pipeline",
+        )
         self.pipe.scheduler = DDIMScheduler.from_config(
             self.pipe.scheduler.config,
             prediction_type="epsilon",
@@ -127,7 +132,50 @@ class TeleportraitsPipeline:
             controlnet_kwargs["dtype"] = self.dtype
         else:
             controlnet_kwargs["torch_dtype"] = self.dtype
-        return ControlNetModel.from_pretrained(controlnet_source, **controlnet_kwargs).to(self.device)
+        return self._load_diffusers_component(
+            ControlNetModel,
+            controlnet_source,
+            controlnet_kwargs,
+            f"{model_label} controlnet",
+        ).to(self.device)
+
+    def _load_diffusers_component(
+        self,
+        loader_cls: Any,
+        source: str,
+        load_kwargs: Dict[str, Any],
+        component_label: str,
+    ) -> Any:
+        try:
+            return loader_cls.from_pretrained(source, **load_kwargs)
+        except OSError as exc:
+            if not self._should_retry_without_safetensors(source, load_kwargs, exc):
+                raise
+
+            retry_kwargs = dict(load_kwargs)
+            retry_kwargs["use_safetensors"] = False
+            if self.config.verbose:
+                _log_stage(
+                    self.config,
+                    f"Falling back to .bin weights for {component_label}: {source}",
+                )
+            return loader_cls.from_pretrained(source, **retry_kwargs)
+
+    @staticmethod
+    def _should_retry_without_safetensors(
+        source: str,
+        load_kwargs: Dict[str, Any],
+        error: OSError,
+    ) -> bool:
+        if not load_kwargs.get("use_safetensors", False):
+            return False
+
+        source_path = Path(source).expanduser()
+        if not source_path.exists():
+            return False
+
+        message = str(error)
+        return "safetensors" in message and "no file named" in message
 
     @torch.no_grad()
     def run(

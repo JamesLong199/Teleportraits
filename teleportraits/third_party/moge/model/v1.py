@@ -13,7 +13,6 @@ import torch.utils
 import torch.utils.checkpoint
 import torch.version
 import utils3d
-from huggingface_hub import hf_hub_download
 
 
 from ..utils.geometry_torch import normalized_view_plane_uv, recover_focal_shift, gaussian_blur_2d, dilate_with_mask
@@ -227,6 +226,8 @@ class MoGeModel(nn.Module):
         if Path(pretrained_model_name_or_path).exists():
             checkpoint = torch.load(pretrained_model_name_or_path, map_location='cpu', weights_only=True)
         else:
+            from huggingface_hub import hf_hub_download
+
             cached_checkpoint_path = hf_hub_download(
                 repo_id=pretrained_model_name_or_path,
                 repo_type="model",

@@ -162,12 +162,31 @@ np.save(output_path, depth)
                 checkpoint_path / "model.pt",
                 checkpoint_path / self.model_version / "model.pt",
             ]
+            cache_patterns = [
+                "snapshots/*/model.pt",
+                "models--*/model.pt",
+                "models--*/snapshots/*/model.pt",
+            ]
+
+            repo_id = self.pretrained_model_name_or_path.strip()
+            if repo_id:
+                repo_cache_name = repo_id.replace("/", "--")
+                cache_patterns = [
+                    f"models--{repo_cache_name}/model.pt",
+                    f"models--{repo_cache_name}/snapshots/*/model.pt",
+                    *cache_patterns,
+                ]
+
             for candidate in candidates:
                 if candidate.exists():
                     return str(candidate.resolve())
+            for pattern in cache_patterns:
+                for candidate in sorted(checkpoint_path.glob(pattern)):
+                    if candidate.is_file():
+                        return str(candidate.resolve())
             raise FileNotFoundError(
                 f"MoGe checkpoint not found in {checkpoint_path}. "
-                "Expected model.pt or <version>/model.pt."
+                "Expected model.pt, <version>/model.pt, or a Hugging Face cache-style model.pt."
             )
 
         return self.pretrained_model_name_or_path

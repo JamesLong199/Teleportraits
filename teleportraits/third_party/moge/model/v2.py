@@ -12,7 +12,6 @@ import torch.utils.checkpoint
 import torch.amp
 import torch.version
 import utils3d
-from huggingface_hub import hf_hub_download
 
 from ..utils.geometry_torch import normalized_view_plane_uv, recover_focal_shift, angle_diff_vec3
 from .utils import wrap_dinov2_attention_with_sdpa, wrap_module_with_gradient_checkpointing, unwrap_module_with_gradient_checkpointing
@@ -90,6 +89,8 @@ class MoGeModel(nn.Module):
         if Path(pretrained_model_name_or_path).exists():
             checkpoint_path = pretrained_model_name_or_path
         else:
+            from huggingface_hub import hf_hub_download
+
             checkpoint_path = hf_hub_download(
                 repo_id=pretrained_model_name_or_path,
                 repo_type="model",
