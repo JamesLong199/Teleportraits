@@ -38,42 +38,59 @@ pip install -e .
 ## Run
 
 ```bash
-teleportraits \
-  --scene-image /path/to/scene.jpg \
-  --reference-image /path/to/person.jpg \
-  --reference-mask-image /path/to/person_mask.png \
-  --scene-prompt "a wide-angle city street at sunset with a person near the crosswalk" \
-  --reference-prompt "a full-body photo of a woman in a red coat" \
-  --output-dir /tmp/teleportraits_out
+python -m teleportraits.cli \
+  --input-json input_config.example.json
 ```
 
-By default, the insertion prompt is composed in paper style by replacing `a person` in the scene prompt with the reference prompt text. You can override with `--edit-prompt` if needed.
+All runtime/model/pass settings are now read from JSON and organized by pass type:
+
+- `passes.inversion`
+- `passes.affordance`
+- `passes.affordance_refine` (OpenPose second affordance pass)
+- `passes.final`
+
+Each of `passes.affordance`, `passes.affordance_refine`, and `passes.final` includes both:
+
+- `controlnet_depth`
+- `controlnet_pose`
+
+The input JSON is copied into each run folder as `input_config.json` for debugging/reproducibility.
+
+Final generation prompt is explicitly provided by `passes.final.prompt` (no automatic scene/reference prompt composition).
 
 Key outputs:
 
 - `final.png`: final insertion result.
 - `initial_pass.png`: initial human generation pass used for mask extraction.
-- `affordance_pass.png`: backward-compatible alias of `initial_pass.png`.
+- `affordance_pass.png`: affordance result used for downstream masking/final pass.
+- `affordance_pose.png`: OpenPose map extracted from `initial_pass.png` when openpose refinement is enabled.
 - `scene_reconstruction.png`: reconstructed scene from inversion trajectory.
 - `foreground_mask.png`: foreground mask used for latent blending.
 - `reference_mask.png`: reference subject mask used for K/V masking.
 
-If `--reference-mask-image` is provided, it is used directly and segmentation is skipped.
+Mask-related runtime settings:
+
+- `runtime.mask_threshold`: legacy threshold for a pixel-difference foreground mask path. Kept for backward compatibility; current default foreground extraction uses SAM3 and does not rely on this threshold.
+- `runtime.mask_min_area_ratio`: minimum connected-component area ratio kept after binary-mask cleanup (used by SAM3 foreground mask post-processing).
+- `runtime.use_transformers_reference_mask`: when `true`, use a transformers person-segmentation model for reference mask extraction; when `false`, use the heuristic reference mask extractor.
+
+Final masks are configured at:
+
+- `passes.final.masks.scene_foreground_mask` (`source: "affordance_pass_sam3"` placeholder, or `source: "file"` + `path`)
+- `passes.final.masks.reference_foreground_mask`
 
 ## Recommended Defaults
 
 - Base model: `stabilityai/stable-diffusion-xl-base-1.0`
 - Scheduler: `DDIMScheduler`
 - Inference steps: `50`
-- Edit guidance scale: `7.5` (paper-like starting point)
+- Per-pass guidance scales (`passes.affordance.guidance_scale`, `passes.affordance_refine.guidance_scale`, `passes.final.guidance_scale`): `7.5` as a starting point
 - Blend window (step indices): `10` to `20` (paper-like starting point)
 
 ## Progress Output
 
-- Stage logs are printed by default.
-- Diffusion/inversion progress bars are shown by default.
-- Use `--quiet` to reduce stage logs.
-- Use `--no-progress-bar` to disable tqdm bars.
+- Stage logs are controlled via `runtime.verbose`.
+- Diffusion/inversion progress bars are controlled via `runtime.show_progress_bar`.
 
 ## Resume Behavior
 
@@ -91,9 +108,9 @@ This repository may require tuning for your prompts/images and GPU memory budget
 ## Troubleshooting
 
 - Black outputs or `invalid value encountered in cast`:
-  - Run with `--torch-dtype float32`.
-  - Reduce inversion iterations, e.g. `--inversion-fixed-point-iters 3`.
+  - Set `runtime.torch_dtype` to `"float32"`.
+  - Reduce `passes.inversion.fixed_point_iters`.
 - Poor reference mask:
   - Default behavior uses a background-color heuristic (good for white/clean background portraits).
-  - Optional model-based mask: add `--use-transformers-reference-mask` (downloads extra weights).
+  - Optional model-based mask: set `runtime.use_transformers_reference_mask=true` (downloads extra weights).
   - For best results, use a clean reference portrait with strong subject/background contrast.

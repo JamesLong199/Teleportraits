@@ -1,0 +1,121 @@
+{
+  "io": {
+    "scene_image": "examples/1024/048_bg_1x1_left.jpg",
+    "reference_image": "examples/1024/040_sitting_4_3_0_center_1x1.jpg",
+    "output_dir": "./outputs/"
+  },
+  "models": {
+    "sdxl": "./pretrained/stable-diffusion-xl-base-1.0",
+    "controlnet_depth": {
+      "model_id": "diffusers/controlnet-depth-sdxl-1.0",
+      "model_dir": "./pretrained/controlnet-depth-sdxl-1.0"
+    },
+    "controlnet_openpose": {
+      "model_id": "thibaud/controlnet-openpose-sdxl-1.0",
+      "model_dir": "./pretrained/controlnet-openpose-sdxl-1.0"
+    },
+    "moge": {
+      "pretrained_model": "Ruicheng/moge-2-vitl-normal",
+      "checkpoint_dir": "./pretrained/moge",
+      "model_version": "v2",
+      "conda_env": "",
+      "use_fp16": true
+    },
+    "openpose_detector": {
+      "model_id": "lllyasviel/Annotators",
+      "model_dir": ""
+    },
+    "sam3": {
+      "checkpoint_dir": "/mnt/whuscs/ljz/sam3",
+      "conda_env": "sam3"
+    }
+  },
+  "passes": {
+    "inversion": {
+      "scene_prompt": "A person sits on the front row bench in an airport waiting area, looking at the camera.",
+      "reference_prompt": "A man in light suit jacket with matching trousers, white shirt, and thin-frame glasses.",
+      "guidance_scale": 1.0,
+      "fixed_point_iters": 4,
+      "random_start_latent": false
+    },
+    "affordance": {
+      "prompt": "A person sits on the front row bench in an airport waiting area, looking at the camera.",
+      "guidance_scale": 7.5,
+      "negative_prompt": "",
+      "controlnet_range": "0:49",
+      "controlnet_depth": {
+        "enabled": true,
+        "scale": 1.0,
+        "mask_image": null,
+        "mask_invert": false,
+        "mask_range": "0:49"
+      },
+      "controlnet_pose": {
+        "enabled": false,
+        "scale": 1.0,
+        "path": null
+      },
+      "foreground_mask": {
+        "path": null,
+        "prompt": "the person that sits on the bench.",
+        "confidence_threshold": 0.5
+      }
+    },
+    "affordance_refine": {
+      "prompt": null,
+      "guidance_scale": 7.5,
+      "controlnet_range": "0:49",
+      "controlnet_depth": {
+        "enabled": true,
+        "scale": 1.0
+      },
+      "controlnet_pose": {
+        "enabled": true,
+        "scale": 1.0
+      }
+    },
+    "final": {
+      "scene_prompt": "airport waiting area scene",
+      "prompt": "A stylish man in a light suit sits on the front row airport bench, looking at the camera. Photo-realistic, natural lighting, preserve scene structure.",
+      "reference_prompt": "A man in light suit jacket with matching trousers, white shirt, and thin-frame glasses.",
+      "guidance_scale": 7.5,
+      "controlnet_range": "0:49",
+      "controlnet_depth": {
+        "enabled": true,
+        "scale": 1.0
+      },
+      "controlnet_pose": {
+        "enabled": true,
+        "scale": 1.0
+      },
+      "latent_blend_range": "10:20",
+      "masks": {
+        "scene_foreground_mask": {
+          "source": "affordance_pass_sam3",
+          "path": null
+        },
+        "reference_foreground_mask": {
+          "path": "examples/1024/040_sitting_4_3_0_whitebg_square_fg_black.png",
+          "invert": true
+        }
+      },
+      "attention": {
+        "enabled": true,
+        "range": "0:49",
+        "target_prefixes": ["up_blocks.1", "up_blocks.2"]
+      },
+      "affordance_only": false
+    }
+  },
+  "runtime": {
+    "image_size": 0,
+    "num_inference_steps": 50,
+    "device": "cuda",
+    "torch_dtype": "float32",
+    "seed": 0,
+    "verbose": true,
+    "show_progress_bar": true,
+    "mask_min_area_ratio": 0.001,
+    "use_transformers_reference_mask": false
+  }
+}

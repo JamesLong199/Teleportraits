@@ -5,6 +5,7 @@ from dataclasses import asdict
 from datetime import datetime
 import inspect
 from pathlib import Path
+import shutil
 from typing import Any, Dict, Optional
 
 import numpy as np
@@ -24,7 +25,6 @@ from teleportraits.depth import MogeDepthMapExtractor, depth_to_control_image
 from teleportraits.inversion import ddim_fixed_point_invert
 from teleportraits.masks import load_binary_mask
 from teleportraits.pose import OpenposeMapExtractor
-from teleportraits.prompts import compose_edit_prompt
 from teleportraits.sampler import run_denoise_trajectory
 from teleportraits.sdxl_utils import (
     encode_prompt_sdxl,
@@ -77,7 +77,11 @@ class TeleportraitsPipeline:
                 model_dir=config.affordance_controlnet_dir,
                 model_label="depth",
             )
-        if config.affordance_use_controlnet_openpose:
+        if (
+            config.affordance_use_controlnet_pose
+            or config.affordance_refine_use_controlnet_pose
+            or config.final_use_controlnet_pose
+        ):
             self.affordance_openpose_controlnet = self._load_controlnet(
                 model_id=config.affordance_openpose_controlnet_model_id,
                 model_dir=config.affordance_openpose_controlnet_dir,
@@ -93,7 +97,11 @@ class TeleportraitsPipeline:
             conda_env=config.moge_conda_env,
         )
         self.openpose_extractor: Optional[OpenposeMapExtractor] = None
-        if config.affordance_use_controlnet_openpose:
+        if (
+            config.affordance_use_controlnet_pose
+            or config.affordance_refine_use_controlnet_pose
+            or config.final_use_controlnet_pose
+        ):
             self.openpose_extractor = OpenposeMapExtractor(
                 pretrained_model_name_or_path=config.openpose_detector_model_id,
                 model_dir=config.openpose_detector_dir,
@@ -185,11 +193,14 @@ class TeleportraitsPipeline:
         foreground_mask_path: Optional[str],
         reference_mask_path: Optional[str],
         reference_mask_invert: bool,
-        scene_prompt: str,
+        affordance_prompt: str,
+        final_scene_prompt: str,
+        final_prompt: str,
         reference_prompt: str,
-        edit_prompt: Optional[str],
         output_dir: str,
-        person_placeholder: str = "a person",
+        affordance_refine_prompt: Optional[str] = None,
+        inversion_reference_prompt: Optional[str] = None,
+        input_json_path: Optional[str] = None,
     ) -> Dict[str, str]:
         base_output_dir = Path(output_dir)
         foreground_mask_override = bool(foreground_mask_path and Path(foreground_mask_path).exists())
@@ -251,6 +262,13 @@ class TeleportraitsPipeline:
         outputs["sam3_conda_env"] = self.config.sam3_conda_env
         if foreground_mask_override and foreground_mask_path is not None:
             outputs["user_foreground_mask_path"] = foreground_mask_path
+        if input_json_path is not None:
+            input_json_src = Path(input_json_path).expanduser()
+            if not input_json_src.exists():
+                raise FileNotFoundError(f"input_json_path does not exist: {input_json_path}")
+            copied_input_path = output_path / "input_config.json"
+            shutil.copy2(input_json_src, copied_input_path)
+            outputs["input_config"] = str(copied_input_path)
 
         _log_stage(self.config, "0/8 Loading inputs")
         scene_image = _resize_for_model(load_image(scene_image_path), target_size=self.config.image_size)
@@ -259,27 +277,37 @@ class TeleportraitsPipeline:
         reference_image.save(reference_input_path)
 
         _log_stage(self.config, "1/8 Encoding prompts")
-        resolved_edit_prompt = compose_edit_prompt(
-            scene_prompt=scene_prompt,
-            reference_prompt=reference_prompt,
-            explicit_edit_prompt=edit_prompt,
-            placeholder=person_placeholder,
-        )
+        resolved_final_prompt = final_prompt.strip()
+        if not resolved_final_prompt:
+            raise ValueError("final_prompt must not be empty.")
         resolved_scene_inversion_prompt = (
             self.config.inversion_prompt.strip()
             if self.config.inversion_prompt is not None and self.config.inversion_prompt.strip()
-            else scene_prompt.strip()
+            else affordance_prompt.strip()
         )
-        resolved_initial_prompt = scene_prompt.strip()
+        resolved_initial_prompt = affordance_prompt.strip()
+        resolved_affordance_refine_prompt = (
+            affordance_refine_prompt.strip()
+            if affordance_refine_prompt is not None and affordance_refine_prompt.strip()
+            else resolved_initial_prompt
+        )
+        resolved_reference_inversion_prompt = (
+            inversion_reference_prompt.strip()
+            if inversion_reference_prompt is not None and inversion_reference_prompt.strip()
+            else reference_prompt.strip()
+        )
         resolved_negative_prompt = self.config.negative_prompt.strip()
         if resolved_negative_prompt:
             _log_stage(self.config, f'Negative prompt enabled: "{resolved_negative_prompt}"')
         else:
             _log_stage(self.config, "Negative prompt disabled (empty).")
         inversion_do_cfg = self.config.inversion_guidance_scale != 1.0
-        outputs["resolved_edit_prompt"] = resolved_edit_prompt
+        outputs["resolved_final_prompt"] = resolved_final_prompt
+        outputs["resolved_edit_prompt"] = resolved_final_prompt
         outputs["resolved_initial_prompt"] = resolved_initial_prompt
+        outputs["resolved_affordance_refine_prompt"] = resolved_affordance_refine_prompt
         outputs["resolved_scene_inversion_prompt"] = resolved_scene_inversion_prompt
+        outputs["resolved_reference_inversion_prompt"] = resolved_reference_inversion_prompt
         outputs["resolved_negative_prompt"] = resolved_negative_prompt
         run_config: Dict[str, Any] = {
             "inputs": {
@@ -288,16 +316,21 @@ class TeleportraitsPipeline:
                 "foreground_mask_path": foreground_mask_path,
                 "reference_mask_path": reference_mask_path,
                 "reference_mask_invert": reference_mask_invert,
-                "scene_prompt": scene_prompt,
+                "affordance_prompt": affordance_prompt,
+                "final_scene_prompt": final_scene_prompt,
+                "final_prompt": final_prompt,
                 "reference_prompt": reference_prompt,
-                "edit_prompt": edit_prompt,
-                "person_placeholder": person_placeholder,
+                "affordance_refine_prompt": affordance_refine_prompt,
+                "inversion_reference_prompt": inversion_reference_prompt,
                 "output_dir": output_dir,
+                "input_json_path": input_json_path,
             },
             "resolved_inputs": {
                 "scene_inversion_prompt": resolved_scene_inversion_prompt,
+                "reference_inversion_prompt": resolved_reference_inversion_prompt,
                 "initial_prompt": resolved_initial_prompt,
-                "edit_prompt": resolved_edit_prompt,
+                "affordance_refine_prompt": resolved_affordance_refine_prompt,
+                "final_prompt": resolved_final_prompt,
                 "negative_prompt": resolved_negative_prompt,
                 "scene_image_size": list(scene_image.size),
                 "reference_image_size": list(reference_image.size),
@@ -319,7 +352,7 @@ class TeleportraitsPipeline:
         if not self.config.affordance_only:
             reference_prompt_embeds_inv = encode_prompt_sdxl(
                 self.pipe,
-                prompt=reference_prompt,
+                prompt=resolved_reference_inversion_prompt,
                 negative_prompt=resolved_negative_prompt,
                 image_size=reference_image.size,
                 device=self.device,
@@ -343,9 +376,17 @@ class TeleportraitsPipeline:
             device=self.device,
             do_cfg=True,
         )
-        edit_prompt_embeds = encode_prompt_sdxl(
+        final_prompt_embeds = encode_prompt_sdxl(
             self.pipe,
-            prompt=resolved_edit_prompt,
+            prompt=resolved_final_prompt,
+            negative_prompt=resolved_negative_prompt,
+            image_size=scene_image.size,
+            device=self.device,
+            do_cfg=True,
+        )
+        affordance_refine_prompt_embeds = encode_prompt_sdxl(
+            self.pipe,
+            prompt=resolved_affordance_refine_prompt,
             negative_prompt=resolved_negative_prompt,
             image_size=scene_image.size,
             device=self.device,
@@ -358,7 +399,7 @@ class TeleportraitsPipeline:
             reference_image_size=reference_image.size,
             inversion_do_cfg=inversion_do_cfg,
             scene_inversion_prompt=resolved_scene_inversion_prompt,
-            reference_inversion_prompt=reference_prompt.strip(),
+            reference_inversion_prompt=resolved_reference_inversion_prompt,
         )
 
         if self.config.random_start_latent:
@@ -449,33 +490,51 @@ class TeleportraitsPipeline:
             _save_tensor_dict(scene_recon_traj_cache, scene_reconstruction_traj)
         _ensure_finite(scene_reconstruction_final, "scene_reconstruction_final")
 
-        controlnet_start_step = self.config.affordance_controlnet_start_step
-        controlnet_end_step = min(
+        affordance_controlnet_start_step = self.config.affordance_controlnet_start_step
+        affordance_controlnet_end_step = min(
             self.config.affordance_controlnet_end_step,
             self.config.num_inference_steps - 1,
         )
-        controlnet_mask_start_step = self.config.affordance_controlnet_mask_start_step
-        controlnet_mask_end_step = min(
+        affordance_controlnet_mask_start_step = self.config.affordance_controlnet_mask_start_step
+        affordance_controlnet_mask_end_step = min(
             self.config.affordance_controlnet_mask_end_step,
             self.config.num_inference_steps - 1,
         )
-        use_depth_controlnet = self.config.affordance_use_controlnet_depth
-        use_openpose_controlnet = self.config.affordance_use_controlnet_openpose
+        affordance_refine_controlnet_start_step = self.config.affordance_refine_controlnet_start_step
+        affordance_refine_controlnet_end_step = min(
+            self.config.affordance_refine_controlnet_end_step,
+            self.config.num_inference_steps - 1,
+        )
+        final_controlnet_start_step = self.config.final_controlnet_start_step
+        final_controlnet_end_step = min(
+            self.config.final_controlnet_end_step,
+            self.config.num_inference_steps - 1,
+        )
+        use_affordance_depth_controlnet = self.config.affordance_use_controlnet_depth
+        use_affordance_pose_controlnet = self.config.affordance_use_controlnet_pose
+        use_affordance_refine_depth_controlnet = self.config.affordance_refine_use_controlnet_depth
+        use_affordance_refine_pose_controlnet = self.config.affordance_refine_use_controlnet_pose
+        use_final_depth_controlnet = self.config.final_use_controlnet_depth
+        use_final_pose_controlnet = self.config.final_use_controlnet_pose
 
         initial_pass_image: Optional[Image.Image] = None
         initial_final: Optional[torch.Tensor] = None
         affordance_pass_image: Optional[Image.Image] = None
         affordance_final: Optional[torch.Tensor] = None
         depth_control_image_tensor: Optional[torch.Tensor] = None
+        affordance_pose_control_image_tensor: Optional[torch.Tensor] = None
         openpose_control_image_tensor: Optional[torch.Tensor] = None
         affordance_controlnet_residual_suppress_mask: Optional[torch.Tensor] = None
-        if foreground_mask_override and use_openpose_controlnet:
+        if foreground_mask_override and (use_affordance_refine_pose_controlnet or use_final_pose_controlnet):
             raise ValueError(
-                "--affordance-controlnet-openpose requires generating the affordance pass; "
+                "Pose-guided refine/final requires generating an initial affordance pass; "
                 "it cannot be combined with --foreground-mask-image override mode."
             )
 
-        if use_depth_controlnet:
+        require_scene_depth_control = (
+            use_affordance_depth_controlnet or use_affordance_refine_depth_controlnet or use_final_depth_controlnet
+        )
+        if require_scene_depth_control:
             if self.affordance_controlnet is None:
                 raise RuntimeError("ControlNet Depth is enabled but model was not initialized.")
             if scene_depth_path.exists():
@@ -515,13 +574,37 @@ class TeleportraitsPipeline:
                 )
 
             if affordance_controlnet_residual_suppress_mask is not None and not (
-                controlnet_start_step <= controlnet_mask_start_step <= controlnet_mask_end_step <= controlnet_end_step
+                affordance_controlnet_start_step
+                <= affordance_controlnet_mask_start_step
+                <= affordance_controlnet_mask_end_step
+                <= affordance_controlnet_end_step
             ):
                 raise ValueError(
                     "affordance_controlnet_mask_range must stay within affordance_controlnet_range. "
-                    f"Got mask range {controlnet_mask_start_step}:{controlnet_mask_end_step} and "
-                    f"controlnet range {controlnet_start_step}:{controlnet_end_step}."
+                    f"Got mask range {affordance_controlnet_mask_start_step}:{affordance_controlnet_mask_end_step} and "
+                    f"controlnet range {affordance_controlnet_start_step}:{affordance_controlnet_end_step}."
                 )
+
+        if use_affordance_pose_controlnet:
+            if self.affordance_openpose_controlnet is None:
+                raise RuntimeError("ControlNet OpenPose is enabled but model was not initialized.")
+            if not self.config.affordance_pose_image_path:
+                raise ValueError(
+                    "affordance_pose_image_path must be provided when affordance pose controlnet is enabled."
+                )
+            pose_path = Path(self.config.affordance_pose_image_path).expanduser()
+            if not pose_path.exists():
+                raise FileNotFoundError(
+                    f"affordance pose control image does not exist: {self.config.affordance_pose_image_path}"
+                )
+            affordance_pose_img = load_image(str(pose_path)).convert("RGB")
+            if affordance_pose_img.size != scene_image.size:
+                affordance_pose_img = affordance_pose_img.resize(scene_image.size, Image.Resampling.BICUBIC)
+            affordance_pose_control_image_tensor = _control_image_to_tensor(
+                affordance_pose_img,
+                device=self.device,
+                dtype=self.dtype,
+            )
 
         if foreground_mask_override:
             _log_stage(self.config, "5/8 Initial human generation pass (skipped: user foreground mask provided)")
@@ -541,20 +624,28 @@ class TeleportraitsPipeline:
             initial_final = _load_tensor(initial_final_cache, device=self.device, dtype=self.dtype)
         else:
             _log_stage(self.config, "5/8 Initial human generation pass")
+            affordance_controlnet, affordance_control_image, affordance_control_scale = _compose_controlnet_inputs(
+                depth_controlnet=self.affordance_controlnet if use_affordance_depth_controlnet else None,
+                depth_control_image=depth_control_image_tensor,
+                depth_scale=self.config.affordance_controlnet_scale,
+                openpose_controlnet=self.affordance_openpose_controlnet if use_affordance_pose_controlnet else None,
+                openpose_control_image=affordance_pose_control_image_tensor,
+                openpose_scale=self.config.affordance_pose_controlnet_scale,
+            )
             initial_pass = run_denoise_trajectory(
                 pipe=self.pipe,
                 start_latents=scene_inv_start,
                 prompt_embeds=initial_prompt_embeds,
-                guidance_scale=self.config.edit_guidance_scale,
+                guidance_scale=self.config.affordance_guidance_scale,
                 num_inference_steps=self.config.num_inference_steps,
-                controlnet=self.affordance_controlnet if use_depth_controlnet else None,
-                control_image=depth_control_image_tensor,
-                controlnet_conditioning_scale=self.config.affordance_controlnet_scale,
-                controlnet_inject_start_step=controlnet_start_step,
-                controlnet_inject_end_step=controlnet_end_step,
+                controlnet=affordance_controlnet,
+                control_image=affordance_control_image,
+                controlnet_conditioning_scale=affordance_control_scale,
+                controlnet_inject_start_step=affordance_controlnet_start_step,
+                controlnet_inject_end_step=affordance_controlnet_end_step,
                 controlnet_residual_suppress_mask=affordance_controlnet_residual_suppress_mask,
-                controlnet_mask_inject_start_step=controlnet_mask_start_step,
-                controlnet_mask_inject_end_step=controlnet_mask_end_step,
+                controlnet_mask_inject_start_step=affordance_controlnet_mask_start_step,
+                controlnet_mask_inject_end_step=affordance_controlnet_mask_end_step,
                 stage_name="Initial human pass",
                 show_progress_bar=self.config.show_progress_bar,
             )
@@ -567,13 +658,11 @@ class TeleportraitsPipeline:
         affordance_pass_image = initial_pass_image
         affordance_final = initial_final
 
-        if use_openpose_controlnet:
+        need_generated_pose_map = use_affordance_refine_pose_controlnet or use_final_pose_controlnet
+        if need_generated_pose_map:
             if self.affordance_openpose_controlnet is None or self.openpose_extractor is None:
                 raise RuntimeError("OpenPose ControlNet is enabled but model/extractor was not initialized.")
-            if affordance_path.exists() and affordance_pose_path.exists() and affordance_final_cache.exists():
-                _log_stage(self.config, "5/8 Second affordance generation pass (OpenPose, resumed)")
-                affordance_pass_image = load_image(str(affordance_path))
-                affordance_final = _load_tensor(affordance_final_cache, device=self.device, dtype=self.dtype)
+            if affordance_pose_path.exists():
                 pose_image = load_image(str(affordance_pose_path)).convert("RGB")
                 if pose_image.size != scene_image.size:
                     pose_image = pose_image.resize(scene_image.size, Image.Resampling.BICUBIC)
@@ -594,30 +683,38 @@ class TeleportraitsPipeline:
                     device=self.device,
                     dtype=self.dtype,
                 )
+
+        run_affordance_refine = use_affordance_refine_depth_controlnet or use_affordance_refine_pose_controlnet
+        if run_affordance_refine:
+            if affordance_path.exists() and affordance_final_cache.exists():
+                _log_stage(self.config, "5/8 Second affordance generation pass (refine, resumed)")
+                affordance_pass_image = load_image(str(affordance_path))
+                affordance_final = _load_tensor(affordance_final_cache, device=self.device, dtype=self.dtype)
+            else:
                 second_controlnet, second_control_image, second_control_scale = _compose_controlnet_inputs(
-                    depth_controlnet=self.affordance_controlnet if use_depth_controlnet else None,
+                    depth_controlnet=self.affordance_controlnet if use_affordance_refine_depth_controlnet else None,
                     depth_control_image=depth_control_image_tensor,
-                    depth_scale=self.config.affordance_controlnet_scale,
-                    openpose_controlnet=self.affordance_openpose_controlnet,
+                    depth_scale=self.config.affordance_refine_depth_controlnet_scale,
+                    openpose_controlnet=self.affordance_openpose_controlnet if use_affordance_refine_pose_controlnet else None,
                     openpose_control_image=openpose_control_image_tensor,
-                    openpose_scale=self.config.affordance_openpose_controlnet_scale,
+                    openpose_scale=self.config.affordance_refine_pose_controlnet_scale,
                 )
-                _log_stage(self.config, "5/8 Second affordance generation pass (OpenPose)")
+                _log_stage(self.config, "5/8 Second affordance generation pass (refine)")
                 second_affordance = run_denoise_trajectory(
                     pipe=self.pipe,
                     start_latents=scene_inv_start,
-                    prompt_embeds=initial_prompt_embeds,
-                    guidance_scale=self.config.edit_guidance_scale,
+                    prompt_embeds=affordance_refine_prompt_embeds,
+                    guidance_scale=self.config.affordance_refine_guidance_scale,
                     num_inference_steps=self.config.num_inference_steps,
                     controlnet=second_controlnet,
                     control_image=second_control_image,
                     controlnet_conditioning_scale=second_control_scale,
-                    controlnet_inject_start_step=controlnet_start_step,
-                    controlnet_inject_end_step=controlnet_end_step,
+                    controlnet_inject_start_step=affordance_refine_controlnet_start_step,
+                    controlnet_inject_end_step=affordance_refine_controlnet_end_step,
                     controlnet_residual_suppress_mask=affordance_controlnet_residual_suppress_mask,
-                    controlnet_mask_inject_start_step=controlnet_mask_start_step,
-                    controlnet_mask_inject_end_step=controlnet_mask_end_step,
-                    stage_name="OpenPose affordance pass",
+                    controlnet_mask_inject_start_step=affordance_controlnet_mask_start_step,
+                    controlnet_mask_inject_end_step=affordance_controlnet_mask_end_step,
+                    stage_name="Affordance refine pass",
                     show_progress_bar=self.config.show_progress_bar,
                 )
                 affordance_final = second_affordance.final_latents
@@ -706,12 +803,12 @@ class TeleportraitsPipeline:
         )
         controller.set_reference_mask(reference_mask_tensor)
         final_controlnet, final_control_image, final_control_scale = _compose_controlnet_inputs(
-            depth_controlnet=self.affordance_controlnet if use_depth_controlnet else None,
+            depth_controlnet=self.affordance_controlnet if use_final_depth_controlnet else None,
             depth_control_image=depth_control_image_tensor,
-            depth_scale=self.config.affordance_controlnet_scale,
-            openpose_controlnet=self.affordance_openpose_controlnet if use_openpose_controlnet else None,
+            depth_scale=self.config.final_depth_controlnet_scale,
+            openpose_controlnet=self.affordance_openpose_controlnet if use_final_pose_controlnet else None,
             openpose_control_image=openpose_control_image_tensor,
-            openpose_scale=self.config.affordance_openpose_controlnet_scale,
+            openpose_scale=self.config.final_pose_controlnet_scale,
         )
 
         original_processors = None
@@ -744,19 +841,19 @@ class TeleportraitsPipeline:
             final_pass = run_denoise_trajectory(
                 pipe=self.pipe,
                 start_latents=scene_inv_start,
-                prompt_embeds=edit_prompt_embeds,
-                guidance_scale=self.config.edit_guidance_scale,
+                prompt_embeds=final_prompt_embeds,
+                guidance_scale=self.config.final_guidance_scale,
                 num_inference_steps=self.config.num_inference_steps,
                 attn_controller=controller if self.config.attention_enabled else None,
                 post_step_hook=blender,
                 controlnet=final_controlnet,
                 control_image=final_control_image,
                 controlnet_conditioning_scale=final_control_scale,
-                controlnet_inject_start_step=controlnet_start_step,
-                controlnet_inject_end_step=controlnet_end_step,
+                controlnet_inject_start_step=final_controlnet_start_step,
+                controlnet_inject_end_step=final_controlnet_end_step,
                 controlnet_residual_suppress_mask=affordance_controlnet_residual_suppress_mask,
-                controlnet_mask_inject_start_step=controlnet_mask_start_step,
-                controlnet_mask_inject_end_step=controlnet_mask_end_step,
+                controlnet_mask_inject_start_step=affordance_controlnet_mask_start_step,
+                controlnet_mask_inject_end_step=affordance_controlnet_mask_end_step,
                 stage_name="Final blended pass",
                 show_progress_bar=self.config.show_progress_bar,
             )
