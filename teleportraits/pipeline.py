@@ -628,6 +628,14 @@ class TeleportraitsPipeline:
             initial_final = _load_tensor(initial_final_cache, device=self.device, dtype=self.dtype)
         else:
             _log_stage(self.config, "5/8 Initial human generation pass")
+            _log_stage(
+                self.config,
+                "5/8 Initial pass ControlNet config: "
+                f"depth_enabled={use_affordance_depth_controlnet}, depth_scale={self.config.affordance_controlnet_scale}, "
+                f"pose_enabled={use_affordance_pose_controlnet}, pose_scale={self.config.affordance_pose_controlnet_scale}, "
+                f"range={affordance_controlnet_start_step}:{affordance_controlnet_end_step}, "
+                f"mask_range={affordance_controlnet_mask_start_step}:{affordance_controlnet_mask_end_step}",
+            )
             affordance_controlnet, affordance_control_image, affordance_control_scale = _compose_controlnet_inputs(
                 depth_controlnet=self.affordance_controlnet if use_affordance_depth_controlnet else None,
                 depth_control_image=depth_control_image_tensor,
@@ -707,6 +715,13 @@ class TeleportraitsPipeline:
                     openpose_scale=self.config.affordance_refine_pose_controlnet_scale,
                 )
                 _log_stage(self.config, "5/8 Second affordance generation pass (refine)")
+                _log_stage(
+                    self.config,
+                    "5/8 Refine pass ControlNet config: "
+                    f"depth_enabled={use_affordance_refine_depth_controlnet}, depth_scale={self.config.affordance_refine_depth_controlnet_scale}, "
+                    f"pose_enabled={use_affordance_refine_pose_controlnet}, pose_scale={self.config.affordance_refine_pose_controlnet_scale}, "
+                    f"range={affordance_refine_controlnet_start_step}:{affordance_refine_controlnet_end_step}",
+                )
                 second_affordance = run_denoise_trajectory(
                     pipe=self.pipe,
                     start_latents=scene_inv_start,
@@ -845,6 +860,13 @@ class TeleportraitsPipeline:
                 controller.set_mode(controller.MODE_INJECT)
 
             _log_stage(self.config, "8/8 Final pass with latent blending")
+            _log_stage(
+                self.config,
+                "8/8 Final pass ControlNet config: "
+                f"depth_enabled={use_final_depth_controlnet}, depth_scale={self.config.final_depth_controlnet_scale}, "
+                f"pose_enabled={use_final_pose_controlnet}, pose_scale={self.config.final_pose_controlnet_scale}, "
+                f"range={final_controlnet_start_step}:{final_controlnet_end_step}",
+            )
             final_pass = run_denoise_trajectory(
                 pipe=self.pipe,
                 start_latents=scene_inv_start,
