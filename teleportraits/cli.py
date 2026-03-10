@@ -192,9 +192,9 @@ def _build_from_json(payload: Dict[str, Any]) -> Tuple[TeleportraitConfig, Dict[
         "passes.affordance.prompt",
         required=True,
     )
-    final_scene_prompt = _as_str(
-        final_cfg.get("scene_prompt"),
-        "passes.final.scene_prompt",
+    affordance_refine_prompt = _as_str(
+        affordance_refine_cfg.get("prompt"),
+        "passes.affordance_refine.prompt",
         default=affordance_prompt,
     )
     final_prompt = _as_str(
@@ -202,30 +202,19 @@ def _build_from_json(payload: Dict[str, Any]) -> Tuple[TeleportraitConfig, Dict[
         "passes.final.prompt",
         required=True,
     )
-    reference_prompt = _as_str(
-        final_cfg.get("reference_prompt"),
-        "passes.final.reference_prompt",
-        default=_as_str(inversion_cfg.get("reference_prompt"), "passes.inversion.reference_prompt"),
-        required=True,
-    )
-    affordance_refine_prompt = _as_str(
-        affordance_refine_cfg.get("prompt"),
-        "passes.affordance_refine.prompt",
-        default=None,
-    )
 
     image_size = _as_int(runtime_cfg.get("image_size"), "runtime.image_size", 1024)
     num_inference_steps = _as_int(runtime_cfg.get("num_inference_steps"), "runtime.num_inference_steps", 50)
 
-    inversion_prompt_override = _as_str(
-        inversion_cfg.get("scene_prompt"),
-        "passes.inversion.scene_prompt",
+    inversion_scene_prompt = _as_str(
+        inversion_cfg.get("prompt_scene", inversion_cfg.get("scene_prompt")),
+        "passes.inversion.prompt_scene",
         default=affordance_prompt,
     )
     inversion_reference_prompt = _as_str(
-        inversion_cfg.get("reference_prompt"),
-        "passes.inversion.reference_prompt",
-        default=reference_prompt,
+        inversion_cfg.get("prompt_reference", inversion_cfg.get("reference_prompt")),
+        "passes.inversion.prompt_reference",
+        required=True,
     )
     inversion_guidance_scale = _as_float(
         inversion_cfg.get("guidance_scale"),
@@ -334,6 +323,11 @@ def _build_from_json(payload: Dict[str, Any]) -> Tuple[TeleportraitConfig, Dict[
         "passes.affordance.controlnet_pose.path",
         default=None,
     )
+    if use_affordance_pose_controlnet:
+        raise ValueError(
+            "passes.affordance.controlnet_pose is not supported. "
+            "Use passes.affordance_refine.controlnet_pose or passes.final.controlnet_pose instead."
+        )
 
     use_affordance_refine_depth_controlnet = _as_bool(
         affordance_refine_depth_cfg.get("enabled"),
@@ -344,6 +338,21 @@ def _build_from_json(payload: Dict[str, Any]) -> Tuple[TeleportraitConfig, Dict[
         affordance_refine_depth_cfg.get("scale"),
         "passes.affordance_refine.controlnet_depth.scale",
         1.0,
+    )
+    affordance_refine_depth_mask_image = _as_str(
+        affordance_refine_depth_cfg.get("mask_image"),
+        "passes.affordance_refine.controlnet_depth.mask_image",
+        default=None,
+    )
+    affordance_refine_depth_mask_invert = _as_bool(
+        affordance_refine_depth_cfg.get("mask_invert"),
+        "passes.affordance_refine.controlnet_depth.mask_invert",
+        False,
+    )
+    affordance_refine_mask_start_step, affordance_refine_mask_end_step = _parse_step_range(
+        affordance_refine_depth_cfg.get("mask_range"),
+        "passes.affordance_refine.controlnet_depth.mask_range",
+        (0, 999),
     )
     use_affordance_refine_pose_controlnet = _as_bool(
         affordance_refine_pose_cfg.get("enabled", affordance_refine_cfg.get("enabled")),
@@ -365,6 +374,21 @@ def _build_from_json(payload: Dict[str, Any]) -> Tuple[TeleportraitConfig, Dict[
         final_depth_cfg.get("scale"),
         "passes.final.controlnet_depth.scale",
         1.0,
+    )
+    final_depth_mask_image = _as_str(
+        final_depth_cfg.get("mask_image"),
+        "passes.final.controlnet_depth.mask_image",
+        default=None,
+    )
+    final_depth_mask_invert = _as_bool(
+        final_depth_cfg.get("mask_invert"),
+        "passes.final.controlnet_depth.mask_invert",
+        False,
+    )
+    final_mask_start_step, final_mask_end_step = _parse_step_range(
+        final_depth_cfg.get("mask_range"),
+        "passes.final.controlnet_depth.mask_range",
+        (0, 999),
     )
     use_final_pose_controlnet = _as_bool(
         final_pose_cfg.get("enabled"),
@@ -431,15 +455,14 @@ def _build_from_json(payload: Dict[str, Any]) -> Tuple[TeleportraitConfig, Dict[
         image_size=image_size,
         inversion_guidance_scale=inversion_guidance_scale,
         inversion_fixed_point_iters=inversion_fixed_point_iters,
-        inversion_prompt=inversion_prompt_override,
+        inversion_scene_prompt=inversion_scene_prompt,
+        inversion_reference_prompt=inversion_reference_prompt,
         random_start_latent=random_start_latent,
-        edit_guidance_scale=final_guidance_scale,
+        affordance_prompt=affordance_prompt,
         affordance_guidance_scale=affordance_guidance_scale,
         affordance_refine_guidance_scale=affordance_refine_guidance_scale,
         final_guidance_scale=final_guidance_scale,
         affordance_use_controlnet_depth=use_affordance_depth_controlnet,
-        affordance_use_controlnet_pose=use_affordance_pose_controlnet,
-        affordance_pose_image_path=affordance_pose_image_path,
         affordance_controlnet_model_id=_as_str(
             model_depth_cfg.get("model_id"),
             "models.controlnet_depth.model_id",
@@ -451,21 +474,34 @@ def _build_from_json(payload: Dict[str, Any]) -> Tuple[TeleportraitConfig, Dict[
             default="./pretrained/controlnet-depth-sdxl-1.0",
         ),
         affordance_controlnet_scale=affordance_depth_control_scale,
-        affordance_pose_controlnet_scale=affordance_pose_control_scale,
         affordance_controlnet_start_step=affordance_controlnet_start_step,
         affordance_controlnet_end_step=affordance_controlnet_end_step,
+        affordance_controlnet_mask_image=depth_control_mask_image,
+        affordance_controlnet_mask_invert=depth_control_mask_invert,
+        affordance_controlnet_mask_start_step=affordance_controlnet_mask_start_step,
+        affordance_controlnet_mask_end_step=affordance_controlnet_mask_end_step,
+        affordance_refine_prompt=affordance_refine_prompt,
         affordance_refine_use_controlnet_depth=use_affordance_refine_depth_controlnet,
         affordance_refine_use_controlnet_pose=use_affordance_refine_pose_controlnet,
         affordance_refine_controlnet_start_step=affordance_refine_controlnet_start_step,
         affordance_refine_controlnet_end_step=affordance_refine_controlnet_end_step,
         affordance_refine_depth_controlnet_scale=affordance_refine_depth_control_scale,
+        affordance_refine_controlnet_mask_image=affordance_refine_depth_mask_image,
+        affordance_refine_controlnet_mask_invert=affordance_refine_depth_mask_invert,
+        affordance_refine_controlnet_mask_start_step=affordance_refine_mask_start_step,
+        affordance_refine_controlnet_mask_end_step=affordance_refine_mask_end_step,
         affordance_refine_pose_controlnet_scale=affordance_refine_pose_control_scale,
+        final_prompt=final_prompt,
         final_use_controlnet_depth=use_final_depth_controlnet,
         final_use_controlnet_pose=use_final_pose_controlnet,
         final_controlnet_start_step=final_controlnet_start_step,
         final_controlnet_end_step=final_controlnet_end_step,
         final_depth_controlnet_scale=final_depth_control_scale,
         final_pose_controlnet_scale=final_pose_control_scale,
+        final_controlnet_mask_image=final_depth_mask_image,
+        final_controlnet_mask_invert=final_depth_mask_invert,
+        final_controlnet_mask_start_step=final_mask_start_step,
+        final_controlnet_mask_end_step=final_mask_end_step,
         affordance_openpose_controlnet_model_id=_as_str(
             model_openpose_cfg.get("model_id"),
             "models.controlnet_openpose.model_id",
@@ -476,7 +512,6 @@ def _build_from_json(payload: Dict[str, Any]) -> Tuple[TeleportraitConfig, Dict[
             "models.controlnet_openpose.model_dir",
             default="./pretrained/controlnet-openpose-sdxl-1.0",
         ),
-        affordance_openpose_controlnet_scale=affordance_refine_pose_control_scale,
         openpose_detector_model_id=_as_str(
             model_openpose_detector_cfg.get("model_id"),
             "models.openpose_detector.model_id",
@@ -487,10 +522,6 @@ def _build_from_json(payload: Dict[str, Any]) -> Tuple[TeleportraitConfig, Dict[
             "models.openpose_detector.model_dir",
             default="",
         ),
-        affordance_controlnet_mask_image=depth_control_mask_image,
-        affordance_controlnet_mask_invert=depth_control_mask_invert,
-        affordance_controlnet_mask_start_step=affordance_controlnet_mask_start_step,
-        affordance_controlnet_mask_end_step=affordance_controlnet_mask_end_step,
         moge_pretrained_model=_as_str(
             model_moge_cfg.get("pretrained_model"),
             "models.moge.pretrained_model",
@@ -544,13 +575,7 @@ def _build_from_json(payload: Dict[str, Any]) -> Tuple[TeleportraitConfig, Dict[
         "foreground_mask_path": foreground_mask_override,
         "reference_mask_path": reference_mask_path,
         "reference_mask_invert": reference_mask_invert,
-        "affordance_prompt": affordance_prompt,
-        "final_scene_prompt": final_scene_prompt,
-        "final_prompt": final_prompt,
-        "reference_prompt": reference_prompt,
         "output_dir": output_dir,
-        "affordance_refine_prompt": affordance_refine_prompt,
-        "inversion_reference_prompt": inversion_reference_prompt,
     }
     return config, run_kwargs
 
@@ -567,13 +592,7 @@ def main() -> None:
         foreground_mask_path=run_kwargs["foreground_mask_path"],
         reference_mask_path=run_kwargs["reference_mask_path"],
         reference_mask_invert=run_kwargs["reference_mask_invert"],
-        affordance_prompt=run_kwargs["affordance_prompt"],
-        final_scene_prompt=run_kwargs["final_scene_prompt"],
-        final_prompt=run_kwargs["final_prompt"],
-        reference_prompt=run_kwargs["reference_prompt"],
         output_dir=run_kwargs["output_dir"],
-        affordance_refine_prompt=run_kwargs["affordance_refine_prompt"],
-        inversion_reference_prompt=run_kwargs["inversion_reference_prompt"],
         input_json_path=args.input_json,
     )
 
